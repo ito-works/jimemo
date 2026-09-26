@@ -52,6 +52,18 @@ are removed first, but only where a browser would read one: a ``/*``
 inside a string or an unquoted ``url(`` token is text, not a comment
 (_css_comments_stripped).
 
+A third, narrower gate answers the parser rather than the page.
+CPython's html.parser (the 3.13.6 floor) reads ``title`` and
+``textarea`` as RCDATA elements regardless of namespace, but a browser
+special-cases them only in the HTML namespace: inside ``<svg>`` or
+``<math>`` the same bytes are ordinary markup the browser parses,
+fetches and runs, while the parser hands them to lint as inert text.
+So a ``<`` in the data of a ``<title>``/``<textarea>`` that sits in
+foreign content is an error — markup this lint can no longer see. An
+escaped ``&lt;`` decodes to ``<`` before the check sees it and is
+rejected with it rather than told apart (accepted over-rejection:
+jimemo chart titles never need a literal ``<``), and the error says so.
+
 Separate from the fetch allowlist, execution checks remain: ``on*``
 attributes and ``javascript:``/``vbscript:`` URLs are never allowed
 anywhere, ``<script src>`` is never allowed, ``<script>`` requires the
@@ -1156,6 +1168,16 @@ class _Linter(HTMLParser):
         # allowlist multiset but owns no completeness verdict of its
         # own -- close() skips them, the outer linter reports them.
         self._noscript_reading = False
+        # The foreign-content RCDATA element currently open ("title" or
+        # "textarea"), or None. CPython's html.parser reads those two
+        # elements as RCDATA in ANY namespace, so inside <svg>/<math>
+        # their whole content arrives in handle_data as text, tags
+        # unparsed — while a browser, which special-cases them only in
+        # the HTML namespace, parses the same bytes as live markup.
+        # Remembering it lets handle_data fail closed on a '<' there
+        # instead of trusting text the browser executes (see the module
+        # docstring's third gate).
+        self._foreign_rcdata: Optional[str] = None
         # The inert container the current <script> sits in ("template"
         # or "noscript"), or None when it is live; set in _check_tag
         # alongside _current_script_seq.
@@ -1232,6 +1254,14 @@ class _Linter(HTMLParser):
     def handle_starttag(self, tag, attrs):
         self._check_tag(tag, attrs)
         self._open_container(tag, self_closing=False)
+        if tag in ("title", "textarea") and self._in_foreign():
+            # In foreign content a browser parses this element's
+            # content as ordinary markup, but html.parser is about to
+            # read it as RCDATA text — remember it for handle_data. A
+            # self-closing <title/>/<textarea/> never enters that mode
+            # (the slash is honoured in foreign content) and sets
+            # nothing, via handle_startendtag never reaching here.
+            self._foreign_rcdata = tag
         if tag == "style":
             self._style_parts = []
         elif tag == "script" and self.charts_declared:
@@ -1254,6 +1284,14 @@ class _Linter(HTMLParser):
 
     def handle_endtag(self, tag):
         self._close_container(tag)
+        if self._foreign_rcdata is not None and (
+            tag == self._foreign_rcdata or not self._in_foreign()
+        ):
+            # The matching end tag closes it; an end tag that closed the
+            # foreign container around it (a mis-nested </svg>) closes
+            # it too, so later data outside the container is not judged
+            # as title text.
+            self._foreign_rcdata = None
         if tag == "style":
             self._flush_style()
         elif tag == "script":
@@ -1262,6 +1300,24 @@ class _Linter(HTMLParser):
             self._flush_noscript()
 
     def handle_data(self, data):
+        if self._foreign_rcdata is not None and "<" in data:
+            # Markup this parser was fooled into calling text: a browser
+            # parses a foreign-content <title>/<textarea>'s bytes as
+            # live markup — a <style> url(), an <img> fetch, a <script>
+            # — all of it invisible to every rule above. Fail closed,
+            # and state the only safe form. An escaped '&lt;' decodes
+            # to '<' before this check sees it and cannot be told apart,
+            # so it is rejected with the real markup (accepted
+            # over-rejection; the message says to drop the '<').
+            self.errors.append(
+                f"a '<' inside <svg>/<math> <{self._foreign_rcdata}> "
+                "content — this parser reads a <title>/<textarea> as "
+                "text even in foreign content, but a browser parses "
+                "the same bytes as live markup this check never sees; "
+                f"remove the '<' from the <{self._foreign_rcdata}> "
+                "text (an escaped '&lt;' decodes to '<' before this "
+                "check sees it, so it is rejected too)"
+            )
         if self._noscript_parts is not None:
             self._noscript_parts.append(data)
         elif self._style_parts is not None:
