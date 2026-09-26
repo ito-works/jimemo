@@ -50,6 +50,11 @@ def verify_checksums(vendor_dir: Path) -> list[str]:
 
     for rel in sorted(real_files):
         if rel not in listed:
-            problems.append(f"unlisted file: {rel}")
+            if "__pycache__" in rel.parts:
+                problems.append(
+                    f"unlisted stale bytecode cache (safe to delete): {rel}"
+                )
+            else:
+                problems.append(f"unlisted file: {rel}")
 
     return problems
