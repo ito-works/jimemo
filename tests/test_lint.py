@@ -2923,6 +2923,70 @@ def test_self_containment_still_checked_inside_inert_container(container):
     assert any("evil.example" in e for e in errors), errors
 
 
+# --- noscript is RAW TEXT to a scripting-enabled reader (jimemo#yzm0) --
+# html.parser parses <noscript> content as markup, but with scripting ON
+# a browser reads it as raw text ending at the FIRST </noscript>: a
+# <style> opened inside would switch html.parser itself into raw-text
+# mode and swallow the live tags after </noscript>. The lint must read
+# the content raw -- and judge it a SECOND time as markup, because a
+# scripting-disabled reader parses it as markup. A remote reference is
+# an error in whichever reading sees it.
+
+
+def test_style_opened_inside_noscript_cannot_hide_live_tags():
+    # The repro: with html.parser alone the <img> after </noscript> is
+    # swallowed by the raw text of the noscript's own <style> and the
+    # page lints clean. The live reading must still see it.
+    html = (
+        "<html><body><noscript><style></noscript>"
+        "<img src=https://evil.example/p></style></noscript></body></html>"
+    )
+    errors, _ = lint_html(html, {"charts": []})
+    assert any("evil.example" in e for e in errors), errors
+
+
+def test_remote_img_inside_noscript_still_errors():
+    # The second (scripting-off) reading: the <img> is live markup
+    # there, so its remote fetch is still an error.
+    html = (
+        "<html><body><noscript><img src=https://evil.example/p>"
+        "</noscript></body></html>"
+    )
+    errors, _ = lint_html(html, {"charts": []})
+    assert any("evil.example" in e for e in errors), errors
+
+
+def test_remote_css_url_inside_noscript_style_still_errors():
+    html = (
+        "<html><body><noscript>"
+        "<style>a{background:url(https://evil.example/q)}</style>"
+        "</noscript></body></html>"
+    )
+    errors, _ = lint_html(html, {"charts": []})
+    assert any("evil.example" in e for e in errors), errors
+
+
+def test_plain_noscript_then_inlined_img_passes():
+    html = (
+        "<html><body><noscript><p>plain</p></noscript>"
+        '<img src="data:image/png;base64,iVBORw0KGgo=">'
+        "</body></html>"
+    )
+    errors, _ = lint_html(html, {"charts": []})
+    assert errors == [], errors
+
+
+@pytest.mark.parametrize("after", ["<p>plain", "<img src=https://evil.example/p>", ""])
+def test_unterminated_noscript_fails_closed(after):
+    # No </noscript> to the end of the document: a scripting-enabled
+    # browser reads everything after it as raw text, so the lint cannot
+    # confirm what the live page holds -- an error either way, never a
+    # silent pass, whatever the swallowed content is.
+    html = f"<html><body><noscript>{after}</body></html>"
+    errors, _ = lint_html(html, {"charts": []})
+    assert any("unterminated" in e for e in errors), errors
+
+
 def test_realistic_chart_page_lib_first_bare_scripts_canvas_per_chart_passes():
     # Shaped like the real render pipeline's output: library in <head>
     # (so it loads before any init), one <canvas id> + bare init
