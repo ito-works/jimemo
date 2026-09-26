@@ -1,6 +1,9 @@
 import hashlib
 import os
+import py_compile
 import shutil
+import struct
+import subprocess
 import sys
 from pathlib import Path
 
@@ -9,6 +12,10 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from jimemo.checksums import verify_checksums
+
+# The checkout this suite lives in: src/ to import jimemo in a fresh
+# interpreter, vendor/ for real vendored packages to import in one.
+REPO = Path(__file__).resolve().parents[1]
 
 
 def make_vendor(tmp_path: Path) -> Path:
@@ -44,7 +51,7 @@ def test_missing_file_is_reported(tmp_path):
 def test_unlisted_python_file_is_reported(tmp_path):
     vendor = make_vendor(tmp_path)
     (vendor / "pkg" / "sneaky.py").write_text("import os\n")
-    assert any("unlisted" in p for p in verify_checksums(vendor))
+    assert verify_checksums(vendor) == ["unlisted file: pkg/sneaky.py"]
 
 
 def test_unlisted_native_extension_is_reported(tmp_path):
@@ -58,7 +65,15 @@ def test_unlisted_pycache_bytecode_is_reported(tmp_path):
     pycache = vendor / "pkg" / "__pycache__"
     pycache.mkdir()
     (pycache / "mod.cpython-39.pyc").write_bytes(b"\x00junk\x01")
-    assert any("unlisted" in p for p in verify_checksums(vendor))
+    # Still reported, never exempted: CPython imports a cached .pyc
+    # INSTEAD of the listed .py when the header matches, so a planted
+    # cache must stay visible to doctor. But with add_vendor_to_path()
+    # keeping bytecode out of vendor/, any cache that IS there is a
+    # leftover, so the message says so instead of reading like tamper.
+    assert verify_checksums(vendor) == [
+        "unlisted stale bytecode cache (safe to delete): "
+        "pkg/__pycache__/mod.cpython-39.pyc"
+    ]
 
 
 def test_symlink_to_listed_file_is_reported(tmp_path):
@@ -159,3 +174,141 @@ def test_real_tomli_tamper_is_caught(tmp_path):
     target.write_text(target.read_text() + "\n# tampered\n")
     problems = verify_checksums(copy)
     assert any("checksum mismatch" in p and "tomli/_parser.py" in p for p in problems)
+
+
+def _fresh_interpreter(
+    tmp_path: Path, code: str, extra_env: dict[str, str] | None = None
+) -> subprocess.CompletedProcess:
+    """Run `code` in a fresh python3 and return the CompletedProcess.
+
+    The vendor-bytecode rules only bite when CPython actually reads and
+    writes caches, and conftest sets sys.dont_write_bytecode for this
+    process -- so these tests must import in a child interpreter. The
+    child must not inherit a bytecode policy from the outer run either
+    (PYTHONDONTWRITEBYTECODE / PYTHONPYCACHEPREFIX env), and its HOME /
+    XDG_CACHE_HOME point under tmp_path: jimemo redirects bytecode to a
+    per-user cache dir, and the test needs it written somewhere it can
+    inspect, not into a real home directory.
+    """
+    home = tmp_path / "home"
+    home.mkdir(exist_ok=True)
+    env = dict(os.environ)
+    env.pop("PYTHONDONTWRITEBYTECODE", None)
+    env.pop("PYTHONPYCACHEPREFIX", None)
+    env["HOME"] = str(home)
+    env["XDG_CACHE_HOME"] = str(home / ".cache")
+    if extra_env:
+        env.update(extra_env)
+    return subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True, env=env
+    )
+
+
+def test_add_vendor_import_writes_no_pyc_under_vendor(tmp_path):
+    """Importing a vendored package after add_vendor_to_path() must not
+    leave bytecode under vendor/: a __pycache__/ dir there is an unlisted
+    file in the SHA256SUMS scan (test_unlisted_pycache_bytecode_is_reported
+    above) and reads like a tamper alarm. CPython must still cache the
+    import -- just in sys.pycache_prefix, outside the repo."""
+    vendor = tmp_path / "vendor"
+    shutil.copytree(REPO / "vendor" / "tomli", vendor / "tomli")
+    code = (
+        "import sys\n"
+        "from pathlib import Path\n"
+        f"sys.path.insert(0, {str(REPO / 'src')!r})\n"
+        "from jimemo import _vendor\n"
+        f"_vendor.VENDOR_DIR = {str(vendor)!r}\n"
+        "_vendor.add_vendor_to_path()\n"
+        "import tomli\n"
+        "assert Path(tomli.__file__).resolve().is_relative_to("
+        "Path(sys.path[0]).resolve())\n"
+        "print('PYCACHE_PREFIX', sys.pycache_prefix)\n"
+    )
+    result = _fresh_interpreter(tmp_path, code)
+    assert result.returncode == 0, result.stderr
+    assert not list(vendor.rglob("*.pyc")), "bytecode written under vendor/"
+    prefix_line = next(
+        line
+        for line in result.stdout.splitlines()
+        if line.startswith("PYCACHE_PREFIX ")
+    )
+    prefix = Path(prefix_line.split(" ", 1)[1])
+    assert not prefix.is_relative_to(vendor)
+    # The import really was cached (not silently uncached), just elsewhere.
+    assert [p for p in prefix.rglob("*.pyc") if "tomli" in p.parts]
+
+
+def test_planted_vendor_pyc_with_matching_header_is_not_used(tmp_path):
+    """A planted vendor/pkg/__pycache__/mod.<tag>.pyc whose 16-byte header
+    matches mod.py -- so CPython would accept it as fresh -- but whose code
+    differs must NOT run. sys.pycache_prefix redirects reads as well as
+    writes, so the listed source is what executes. This is the case the
+    pycache_prefix change exists for: exempting __pycache__ from the scan
+    instead would let this cache run while doctor reports clean."""
+    vendor = tmp_path / "vendor"
+    pkg = vendor / "pkg"
+    pkg.mkdir(parents=True)
+    (pkg / "__init__.py").write_text("")
+    source = pkg / "mod.py"
+    source.write_text('MARKER = "source"\n')
+
+    # Compile DIFFERENT code, then re-head it to look fresh for mod.py:
+    # magic and flags stay (same interpreter, timestamp-based pyc); the
+    # mtime (offset 8) and source size (offset 12) are patched to
+    # mod.py's stat, exactly what CPython validates.
+    planted_body = tmp_path / "planted_body.py"
+    planted_body.write_text('MARKER = "planted"\n')
+    cfile = py_compile.compile(
+        str(planted_body), cfile=str(tmp_path / "planted.pyc")
+    )
+    data = bytearray(Path(cfile).read_bytes())
+    st = source.stat()
+    struct.pack_into("<I", data, 8, int(st.st_mtime))
+    struct.pack_into("<I", data, 12, st.st_size)
+    (pkg / "__pycache__").mkdir()
+    (pkg / "__pycache__" / f"mod.{sys.implementation.cache_tag}.pyc").write_bytes(
+        bytes(data)
+    )
+
+    code = (
+        "import sys\n"
+        f"sys.path.insert(0, {str(REPO / 'src')!r})\n"
+        "from jimemo import _vendor\n"
+        f"_vendor.VENDOR_DIR = {str(vendor)!r}\n"
+        "_vendor.add_vendor_to_path()\n"
+        "import pkg.mod\n"
+        "print('MARKER', pkg.mod.MARKER)\n"
+    )
+    result = _fresh_interpreter(tmp_path, code)
+    assert result.returncode == 0, result.stderr
+    assert "MARKER source" in result.stdout, result.stdout
+
+
+def test_preset_pycache_prefix_is_left_as_caller_set_it(tmp_path):
+    """add_vendor_to_path() must not replace a pycache_prefix the caller
+    set -- nor one a user exported as PYTHONPYCACHEPREFIX, which the
+    interpreter installs as sys.pycache_prefix before any code runs. In
+    both cases the vendor path is still added."""
+    header = f"import sys\nsys.path.insert(0, {str(REPO / 'src')!r})\n"
+    tail = (
+        "from jimemo import _vendor\n"
+        "_vendor.add_vendor_to_path()\n"
+        "print('PYCACHE_PREFIX', sys.pycache_prefix)\n"
+        "print('VENDOR_ON_PATH', str(_vendor.VENDOR_DIR) in sys.path)\n"
+    )
+
+    preset = tmp_path / "preset-pycache"
+    result = _fresh_interpreter(
+        tmp_path, header + f"sys.pycache_prefix = {str(preset)!r}\n" + tail
+    )
+    assert result.returncode == 0, result.stderr
+    assert f"PYCACHE_PREFIX {preset}" in result.stdout
+    assert "VENDOR_ON_PATH True" in result.stdout
+
+    exported = tmp_path / "exported-pycache"
+    result = _fresh_interpreter(
+        tmp_path, header + tail, extra_env={"PYTHONPYCACHEPREFIX": str(exported)}
+    )
+    assert result.returncode == 0, result.stderr
+    assert f"PYCACHE_PREFIX {exported}" in result.stdout
+    assert "VENDOR_ON_PATH True" in result.stdout
