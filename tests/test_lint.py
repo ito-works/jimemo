@@ -2976,6 +2976,27 @@ def test_plain_noscript_then_inlined_img_passes():
     assert errors == [], errors
 
 
+@pytest.mark.parametrize("inner", [
+    # A scripting-off reader's <style> runs past the first </noscript>
+    # to </style>, so the @import is live CSS to it...
+    '<style></noscript>@import "https://evil.example/d.css";</style>',
+    # ...and its <img> tag runs past it inside a quoted attribute.
+    '<img alt="</noscript>" src=https://evil.example/x>',
+])
+def test_noscript_content_carried_past_end_tag_when_scripting_off_fails_closed(inner):
+    html = f"<html><body><noscript>{inner}</noscript></body></html>"
+    errors, _ = lint_html(html, {"charts": []})
+    assert any("scripting off" in e for e in errors), errors
+
+
+def test_noscript_text_ending_in_bare_charref_passes():
+    # html.parser holds back trailing text after "&" for more input;
+    # that is text, not an unfinished tag.
+    html = "<html><body><noscript>Tom &amp Jerry &amp</noscript></body></html>"
+    errors, _ = lint_html(html, {"charts": []})
+    assert errors == [], errors
+
+
 @pytest.mark.parametrize("after", ["<p>plain", "<img src=https://evil.example/p>", ""])
 def test_unterminated_noscript_fails_closed(after):
     # No </noscript> to the end of the document: a scripting-enabled
