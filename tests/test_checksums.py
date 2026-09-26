@@ -185,7 +185,9 @@ def _fresh_interpreter(
     writes caches, and conftest sets sys.dont_write_bytecode for this
     process -- so these tests must import in a child interpreter. The
     child must not inherit a bytecode policy from the outer run either
-    (PYTHONDONTWRITEBYTECODE / PYTHONPYCACHEPREFIX env), and its HOME /
+    (PYTHONDONTWRITEBYTECODE / PYTHONPYCACHEPREFIX env, or PYTHONOPTIMIZE,
+    which makes it look for .opt-N.pyc names and ignore a plain planted
+    cache), and its HOME /
     XDG_CACHE_HOME point under tmp_path: jimemo redirects bytecode to a
     per-user cache dir, and the test needs it written somewhere it can
     inspect, not into a real home directory.
@@ -195,6 +197,7 @@ def _fresh_interpreter(
     env = dict(os.environ)
     env.pop("PYTHONDONTWRITEBYTECODE", None)
     env.pop("PYTHONPYCACHEPREFIX", None)
+    env.pop("PYTHONOPTIMIZE", None)
     env["HOME"] = str(home)
     env["XDG_CACHE_HOME"] = str(home / ".cache")
     if extra_env:
@@ -253,13 +256,17 @@ def test_planted_vendor_pyc_with_matching_header_is_not_used(tmp_path):
     source.write_text('MARKER = "source"\n')
 
     # Compile DIFFERENT code, then re-head it to look fresh for mod.py:
-    # magic and flags stay (same interpreter, timestamp-based pyc); the
+    # magic and flags stay (same interpreter; TIMESTAMP is explicit because
+    # py_compile writes a checked-hash pyc when SOURCE_DATE_EPOCH is set,
+    # and patching that would corrupt the hash, not fake freshness); the
     # mtime (offset 8) and source size (offset 12) are patched to
     # mod.py's stat, exactly what CPython validates.
     planted_body = tmp_path / "planted_body.py"
     planted_body.write_text('MARKER = "planted"\n')
     cfile = py_compile.compile(
-        str(planted_body), cfile=str(tmp_path / "planted.pyc")
+        str(planted_body),
+        cfile=str(tmp_path / "planted.pyc"),
+        invalidation_mode=py_compile.PycInvalidationMode.TIMESTAMP,
     )
     data = bytearray(Path(cfile).read_bytes())
     st = source.stat()
@@ -269,6 +276,19 @@ def test_planted_vendor_pyc_with_matching_header_is_not_used(tmp_path):
     (pkg / "__pycache__" / f"mod.{sys.implementation.cache_tag}.pyc").write_bytes(
         bytes(data)
     )
+
+    # Control: the same fixture, imported with vendor/ on sys.path but no
+    # add_vendor_to_path(), must run the plant. Without it, a fixture
+    # CPython rejects for some other reason would pass the check below.
+    control = (
+        "import sys\n"
+        f"sys.path.insert(0, {str(vendor)!r})\n"
+        "import pkg.mod\n"
+        "print('MARKER', pkg.mod.MARKER)\n"
+    )
+    result = _fresh_interpreter(tmp_path, control)
+    assert result.returncode == 0, result.stderr
+    assert "MARKER planted" in result.stdout, result.stdout
 
     code = (
         "import sys\n"
