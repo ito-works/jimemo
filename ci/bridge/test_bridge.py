@@ -84,9 +84,10 @@ class Runner:
 def env(**kw):
     e = {"GITHUB_REPOSITORY": REPO, "GITHUB_TOKEN": "read-token",
          "MUJIN_APP_ID": str(APP), "MUJIN_APP_INSTALLATION_ID": "163475648",
-         "KATA_BIN": "/nonexistent/kata"}
+         "KATA_BIN": "/nonexistent/kata", "KATA_PROJECTS": "jibot-code"}
     e.update(kw)
-    return e
+    # None deletes a key, so a test can run with the variable unset.
+    return {k: v for k, v in e.items() if v is not None}
 
 
 def published(gh):
@@ -94,16 +95,20 @@ def published(gh):
     return [json.loads(p[2]) for p in posts], [p[3] for p in posts]
 
 
-class PullRequestPath(unittest.TestCase):
-    def run_pr(self, review_rc, pr=None, event_head=SHA_A, kata_rc=0):
+class PullRequestRun:
+    """The pull-request harness, shared by the classes below without their tests."""
+
+    def run_pr(self, review_rc, pr=None, event_head=SHA_A, kata_rc=0, **env_kw):
         gh = FakeGitHub({("GET", "/repos/%s/pulls/7" % REPO): pr or pr_doc(),
                          ("POST", "/repos/%s/check-runs" % REPO): {"id": 99}})
         runner = Runner(review_rc, kata_rc)
         rc = rev.main(env(BRIDGE_EVENT="pull_request_target", BRIDGE_PR_NUMBER="7",
-                          BRIDGE_PR_HEAD_SHA=event_head),
+                          BRIDGE_PR_HEAD_SHA=event_head, **env_kw),
                       opener=gh, runner=runner, mint=lambda *a: "app-token")
         return rc, gh, runner
 
+
+class PullRequestPath(PullRequestRun, unittest.TestCase):
     def test_valid_evidence_publishes_success_on_the_snapshot_head_with_the_app_token(self):
         rc, gh, runner = self.run_pr(0)
         self.assertEqual(rc, 0)
@@ -184,6 +189,54 @@ class PullRequestPath(unittest.TestCase):
         self.assertEqual(rc, 1)
 
 
+class ProjectBinding(PullRequestRun, unittest.TestCase):
+    """The body's kata project decides the required check only when this
+    repository declares it in KATA_PROJECTS — the binding kata_bridge applies
+    before it touches an issue (kata jibot-code#3vb4, #ajqt). Every refusal is a
+    published failure, and neither kata nor review.py runs."""
+
+    def refused(self, text, body=BODY, **env_kw):
+        rc, gh, runner = self.run_pr(0, pr=pr_doc(body=body), **env_kw)
+        self.assertEqual(rc, 0)
+        bodies, _ = published(gh)
+        self.assertEqual(len(bodies), 1)
+        self.assertEqual(bodies[0]["conclusion"], "failure")
+        self.assertIn(text, bodies[0]["output"]["summary"])
+        self.assertEqual(runner.argv, [])
+
+    def test_an_undeclared_project_fails_without_reading_kata(self):
+        # review.py would pass (rc 0): the evidence is not what refuses.
+        self.refused("'other' is not in KATA_PROJECTS",
+                     body=BODY.replace("jibot-code#q4av", "other#q4av"))
+
+    def test_an_unset_kata_projects_fails_every_pull_request(self):
+        for value in (None, "", "  "):
+            self.refused("KATA_PROJECTS is not set", KATA_PROJECTS=value)
+
+    def test_a_malformed_kata_projects_fails_even_when_it_names_the_project(self):
+        for value in ("jibot-code,", "jibot-code,,x", "jibot-code,Bad!"):
+            self.refused("KATA_PROJECTS is malformed", KATA_PROJECTS=value)
+
+    def test_both_declared_projects_are_served(self):
+        for ref, project in (("jibot-code#q4av", "jibot-code"),
+                             ("nanoclaw#aaaa", "nanoclaw")):
+            rc, gh, runner = self.run_pr(
+                0, pr=pr_doc(body=BODY.replace("jibot-code#q4av", ref)),
+                KATA_PROJECTS="nanoclaw,jibot-code")
+            self.assertEqual(rc, 0)
+            self.assertEqual(published(gh)[0][0]["conclusion"], "success")
+            self.assertEqual(runner.argv[0][3:5], ["--project", project])
+
+    def test_pr_verdict_with_no_projects_refuses(self):
+        # The default is the fail-closed one, not "skip the check".
+        runner = Runner(0)
+        state, why = rev.pr_verdict(dict(pr_doc(), head_sha=SHA_A),
+                                    "/nonexistent/kata", runner=runner)
+        self.assertEqual(state, "failure")
+        self.assertIn("KATA_PROJECTS is not set", why)
+        self.assertEqual(runner.argv, [])
+
+
 class GroupRun:
     """The merge-group harness, shared by the classes below without their tests."""
 
@@ -193,8 +246,14 @@ class GroupRun:
 
     def run_group(self, entries, runs_by_head, n_commits=None, queue_ref=None,
                   graphql=None, base_oid=BASE, merge_method="REBASE", commits=None,
-                  rules=None):
-        """entries: [(position, group_sha, pr_number, pr_head, pr_commit_count)]"""
+                  rules=None, prs=None, runner=None, **env_kw):
+        """entries: [(position, group_sha, pr_number, pr_head, pr_commit_count)]
+
+        prs: {pr_number: pull request document} for the group-time re-read of
+        each member; by default each member's body is BODY at its queue head.
+        runner: the kata/review.py stand-in for the group-time re-verification;
+        by default every member's evidence passes.
+        """
         nodes = [{"position": pos, "state": "AWAITING_CHECKS",
                   "headCommit": {"oid": gsha}, "baseCommit": {"oid": base_oid},
                   "pullRequest": {"number": num, "headRefOid": head,
@@ -222,13 +281,17 @@ class GroupRun:
                 "commits": commits},
             ("POST", "/repos/%s/check-runs" % REPO): {"id": 5},
         }
+        for _pos, _gsha, num, head, _n in entries:
+            doc = (prs or {}).get(num) or pr_doc(number=num, head=head)
+            routes[("GET", "/repos/%s/pulls/%d" % (REPO, num))] = doc
         for head, runs in runs_by_head.items():
             routes[("GET", "/repos/%s/commits/%s/check-runs" % (REPO, head))] = (
                 runs if isinstance(runs, int) else {"check_runs": runs})
         gh = FakeGitHub(routes)
         rc = rev.main(env(BRIDGE_EVENT="merge_group", BRIDGE_GROUP_SHA=SHA_G,
-                          BRIDGE_QUEUE_REF=queue_ref or self.QUEUE_REF),
-                      opener=gh, mint=lambda *a: "app-token")
+                          BRIDGE_QUEUE_REF=queue_ref or self.QUEUE_REF, **env_kw),
+                      opener=gh, runner=runner or Runner(0),
+                      mint=lambda *a: "app-token")
         bodies, _ = published(gh)
         return rc, bodies, gh
 
@@ -320,6 +383,91 @@ class MergeGroupPath(GroupRun, unittest.TestCase):
         rc, bodies, _ = self.run_group([(1, SHA_G, 7, SHA_A, 1)], {SHA_A: 500})
         self.assertEqual(rc, 1)
         self.assertEqual(bodies, [])
+
+
+class MergeGroupProjectBinding(GroupRun, unittest.TestCase):
+    """The App check on a member's head is only as current as the moment it was
+    published, and it does not say which project's evidence it accepted.
+    KATA_PROJECTS, the pull request's body and the kata issue can all change
+    after it without a new pull-request run, so the group re-runs the whole
+    pull-request verdict for every member at group time (kata jibot-code#ajqt)."""
+
+    ONE = [(1, SHA_G, 7, SHA_A, 1)]
+    REVIEWED = {SHA_A: [check_run()]}
+
+    def assert_fails(self, text, **kw):
+        rc, bodies, _ = self.run_group(self.ONE, self.REVIEWED, **kw)
+        self.assertEqual(rc, 0)
+        self.assertEqual(len(bodies), 1)
+        self.assertEqual(bodies[0]["head_sha"], SHA_G)
+        self.assertEqual(bodies[0]["conclusion"], "failure")
+        self.assertIn(text, bodies[0]["output"]["summary"])
+
+    def test_a_reviewed_member_with_a_declared_project_passes(self):
+        rc, bodies, gh = self.run_group(self.ONE, self.REVIEWED)
+        self.assertEqual((rc, bodies[0]["conclusion"]), (0, "success"))
+        self.assertTrue(any(c[1].startswith("/repos/%s/pulls/7" % REPO)
+                            for c in gh.calls))
+
+    def test_an_unset_kata_projects_fails_the_group_despite_a_success_check(self):
+        for value in (None, ""):
+            self.assert_fails("KATA_PROJECTS is not set", KATA_PROJECTS=value)
+
+    def test_a_malformed_kata_projects_fails_the_group(self):
+        self.assert_fails("KATA_PROJECTS is malformed",
+                          KATA_PROJECTS="jibot-code,Bad!")
+
+    def test_a_narrowed_kata_projects_fails_the_group(self):
+        self.assert_fails("'jibot-code' is not in KATA_PROJECTS",
+                          KATA_PROJECTS="nanoclaw")
+
+    def test_a_body_edited_to_an_undeclared_project_fails_the_group(self):
+        edited = pr_doc(body=BODY.replace("jibot-code#q4av", "other#q4av"))
+        self.assert_fails("'other' is not in KATA_PROJECTS", prs={7: edited})
+
+    def test_a_body_edited_to_name_no_issue_fails_the_group(self):
+        self.assert_fails("names no kata issue", prs={7: pr_doc(body="prose")})
+
+    def test_a_member_whose_head_moved_fails_the_group(self):
+        self.assert_fails("moved", prs={7: pr_doc(head=SHA_B)})
+
+    def test_every_member_is_bound_not_only_the_last(self):
+        entries = [(1, "e" * 40, 6, SHA_B, 1), (2, SHA_G, 7, SHA_A, 1)]
+        runs = {SHA_A: [check_run()], SHA_B: [check_run()]}
+        first = pr_doc(number=6, head=SHA_B,
+                       body=BODY.replace("jibot-code#q4av", "other#q4av"))
+        rc, bodies, _ = self.run_group(entries, runs, prs={6: first})
+        self.assertEqual(bodies[0]["conclusion"], "failure")
+        self.assertIn("#6", bodies[0]["output"]["summary"])
+
+    def test_the_group_reads_evidence_for_the_current_body_at_the_queue_head(self):
+        runner = Runner(0)
+        rc, bodies, _ = self.run_group(self.ONE, self.REVIEWED, runner=runner)
+        self.assertEqual((rc, bodies[0]["conclusion"]), (0, "success"))
+        self.assertEqual(runner.argv[0][:5],
+                         ["/nonexistent/kata", "show", "q4av", "--project", "jibot-code"])
+        self.assertEqual(runner.argv[1][-2:], ["check-show-json", SHA_A])
+
+    def test_evidence_from_a_project_since_removed_does_not_carry_the_group(self):
+        # The head's App success was earned on nanoclaw#aaaa while nanoclaw was
+        # declared. nanoclaw is then removed and the body edited to a declared
+        # issue that holds no evidence for this head: the old success must not
+        # carry the group (fresheyes round 1 on ajqt).
+        edited = pr_doc(body=BODY.replace("jibot-code#q4av", "jibot-code#none"))
+        rc, bodies, _ = self.run_group(self.ONE, self.REVIEWED, runner=Runner(3),
+                                       prs={7: edited}, KATA_PROJECTS="jibot-code")
+        self.assertEqual((rc, bodies[0]["conclusion"]), (0, "failure"))
+        self.assertIn("#7", bodies[0]["output"]["summary"])
+
+    def test_unreadable_kata_at_group_time_fails_the_group(self):
+        rc, bodies, _ = self.run_group(self.ONE, self.REVIEWED,
+                                       runner=Runner(0, kata_rc=7))
+        self.assertEqual((rc, bodies[0]["conclusion"]), (0, "failure"))
+        self.assertIn("kata unreadable", bodies[0]["output"]["summary"])
+
+    def test_an_unreadable_member_publishes_nothing(self):
+        rc, bodies, _ = self.run_group(self.ONE, self.REVIEWED, prs={7: 502})
+        self.assertEqual((rc, bodies), (1, []))
 
 
 def commit(sha, *parents):

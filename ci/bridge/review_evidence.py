@@ -11,7 +11,11 @@ Runs on the bridge runner, from main's copy of the workflow, on three triggers
 
 It never checks out, imports or executes anything from the pull request. What it
 reads from a pull request is text (the body) and identifiers, and both are
-validated before they reach an argv.
+validated before they reach an argv. The kata project the body names must be
+one the repository declares in KATA_PROJECTS, or the check fails — on the pull
+request's head, and again for every member when its merge group is checked:
+the group re-runs the pull-request verdict (current body, current variable,
+evidence read from kata) for each member, on top of the App check on its head.
 
 The check is a CHECK RUN created with the App's installation token, because the
 ruleset binds `mujin/review-evidence` to the App's integration_id: a status or
@@ -127,8 +131,10 @@ def pr_snapshot(repo, number, token, opener=None):
 
 
 # --- The verdict for one pull request head.
-def pr_verdict(snap, kata_bin, runner=None):
-    """(conclusion, summary) — conclusion is 'success' or 'failure'."""
+def pr_verdict(snap, kata_bin, runner=None, projects=None):
+    """(conclusion, summary) — conclusion is 'success' or 'failure'.
+
+    `projects` is the repository's KATA_PROJECTS value; unset refuses."""
     meta, err = pr_meta.parse_body(snap["body"])
     if err:
         return "failure", "the pull request body is malformed: %s" % err
@@ -138,6 +144,13 @@ def pr_verdict(snap, kata_bin, runner=None):
         # not land through this lane.
         return "failure", ("the pull request body names no kata issue, so "
                            "there is no review evidence to read")
+    # The body is text a producer wrote, and the issue it names decides the
+    # required check. Only a project this repository declares in KATA_PROJECTS
+    # may decide it — the binding kata_bridge applies before it touches an
+    # issue (kata jibot-code#3vb4, #ajqt). Unset or malformed refuses.
+    ok, why = pr_meta.project_declared(meta, projects)
+    if not ok:
+        return "failure", why
     # No waiver author is resolved yet, so every waiver is refused here: the
     # canary proves the reviewed path, and an unattributed waiver must not pass.
     state, why = review_check.verdict(meta["ref"], meta["project"],
@@ -315,8 +328,33 @@ def member_reviewed(repo, member, app_id, token, opener=None):
     return True, ""
 
 
+def member_bound(repo, member, projects, kata_bin, token, opener=None,
+                 runner=None):
+    """(ok, why): does this member pass `pr_verdict` NOW, at its queue head?
+
+    The App check on a member's head says `pr_verdict` accepted it when it ran,
+    against the body, the KATA_PROJECTS and the kata issue of that moment. All
+    three can change after it without a new pull-request run (a body edit does
+    not move the head, and `edited` is not a trigger), and the check does not
+    record which project's evidence it accepted. So the group runs the whole
+    verdict again for every member (kata jibot-code#ajqt): the current body,
+    bound to the current KATA_PROJECTS, with its evidence read from kata for
+    the head the queue names. A member whose head has moved since the queue
+    snapshot is refused, not judged on a body read for another head.
+    """
+    snap = pr_snapshot(repo, member["number"], token, opener=opener)
+    if snap["head_sha"] != member["head_sha"]:
+        return False, ("pull request #%s moved from %s to %s since the queue "
+                       "snapshot" % (member["number"], member["head_sha"][:8],
+                                     snap["head_sha"][:8]))
+    conclusion, why = pr_verdict(snap, kata_bin, runner=runner, projects=projects)
+    if conclusion != "success":
+        return False, "pull request #%s: %s" % (member["number"], why)
+    return True, ""
+
+
 def group_verdict(repo, base_branch, group_sha, queue_ref, app_id, token,
-                  opener=None):
+                  opener=None, projects=None, kata_bin=None, runner=None):
     members = group_members(repo, base_branch, group_sha, token, opener=opener)
     for m in members:
         if not m["attributed"]:
@@ -333,6 +371,10 @@ def group_verdict(repo, base_branch, group_sha, queue_ref, app_id, token,
                            "pull request (#%s) on %s — failing closed"
                            % (queue_ref, members[-1]["number"], base_branch))
     for m in members:
+        ok, why = member_bound(repo, m, projects, kata_bin, token,
+                               opener=opener, runner=runner)
+        if not ok:
+            return "failure", why
         ok, why = member_reviewed(repo, m, app_id, token, opener=opener)
         if not ok:
             return "failure", why
@@ -380,13 +422,18 @@ def main(env=None, opener=None, runner=None, mint=None):
             if runner is None:
                 load_kata_token(env.get("MUJIN_KATA_TOKEN", KATA_TOKEN_PATH),
                                 os.environ)
-            conclusion, summary = pr_verdict(snap, kata_bin, runner=runner)
+            conclusion, summary = pr_verdict(snap, kata_bin, runner=runner,
+                                             projects=env.get("KATA_PROJECTS"))
         elif event == "merge_group":
             sha = env["BRIDGE_GROUP_SHA"]
+            if runner is None:
+                load_kata_token(env.get("MUJIN_KATA_TOKEN", KATA_TOKEN_PATH),
+                                os.environ)
             conclusion, summary = group_verdict(
                 repo, env.get("BRIDGE_BASE_BRANCH", "main"), sha,
                 env.get("BRIDGE_QUEUE_REF", ""), app_id, read_token,
-                opener=opener)
+                opener=opener, projects=env.get("KATA_PROJECTS"),
+                kata_bin=kata_bin, runner=runner)
         else:
             raise BridgeError("unexpected trigger %r" % event)
 
