@@ -3105,6 +3105,85 @@ def test_standalone_init_with_non_json_config_fails():
     assert errors != []
 
 
+# --- Foreign-content RCDATA: <svg>/<math> <title>/<textarea> -------
+#
+# CPython's html.parser (the 3.13.6 floor) reads <title> and <textarea>
+# as RCDATA in EVERY namespace, but a browser does that only in the
+# HTML namespace: inside <svg>/<math> the same bytes are ordinary
+# markup a browser parses, fetches and runs, while the parser hands
+# them to lint as inert text. Each payload below must be an error.
+# Which rule reports it depends on the running parser's RCDATA
+# behaviour -- at/above the floor the whole blob is title text and the
+# foreign-RCDATA rule fires; on an older parser the inner tags parse
+# for real and the ordinary rules (CSS url(), img src, no-charts
+# <script>, banned <iframe>) fire instead -- but every one fails
+# closed either way, so these assert an error, not a message.
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        "<svg><title>"
+        "<style>a{background:url(https://evil.example/p)}</style>"
+        "</title></svg>",
+        "<svg><title><img src=https://evil.example/p></title></svg>",
+        '<svg><title><script>new Image().src="http://e.x/c"</script>'
+        "</title></svg>",
+        '<svg><title><iframe src="http://e.x/d"></iframe></title></svg>',
+        "<svg><textarea>"
+        "<style>body{background:url(http://e.x/a)}</style>"
+        "</textarea></svg>",
+    ],
+    ids=["style-url", "img-src", "script", "iframe", "textarea-style"],
+)
+def test_markup_inside_foreign_title_or_textarea_errors(payload):
+    errors, _ = _lint(payload)
+    assert errors, errors
+
+
+def test_plain_text_foreign_title_passes():
+    # A <title> with no '<' in it is exactly what a chart svg carries.
+    errors, _ = _lint("<svg><title>Chart of revenue</title></svg>")
+    assert errors == [], errors
+
+
+def test_plain_text_foreign_textarea_passes():
+    errors, _ = _lint("<svg><textarea>notes</textarea></svg>")
+    assert errors == [], errors
+
+
+def test_escaped_lt_inside_foreign_title_errors_with_remove_hint():
+    # convert_charrefs decodes '&lt;' to '<' before handle_data sees
+    # it, so an escaped '<' trips the same rule; the error must tell
+    # the author to remove the '<' from the title.
+    errors, _ = _lint("<svg><title>a &lt; b</title></svg>")
+    assert len(errors) == 1, errors
+    assert "remove the '<' from the <title>" in errors[0]
+
+
+def test_math_mtext_content_behaves_as_before():
+    # <mtext> is not one of html.parser's RCDATA elements, so its
+    # content still parses as markup and is judged by the ordinary
+    # rules: plain MathML passes, a remote fetch inside it errors.
+    errors, _ = _lint("<math><mtext><mi>v</mi></mtext></math>")
+    assert errors == [], errors
+    errors, _ = _lint(
+        '<math><mtext><img src="https://evil.example/p"></mtext></math>'
+    )
+    assert any("evil.example" in e for e in errors), errors
+
+
+def test_html_namespace_title_and_textarea_are_unchanged():
+    # A browser reads <title>/<textarea> as RCDATA text in the HTML
+    # namespace, so a decoded '<' there is inert and must pass; only
+    # the foreign-content case above fails closed.
+    errors, _ = _lint("<textarea>a &lt; b</textarea>")
+    assert errors == [], errors
+    html = "<html><head><title>a &lt; b</title></head><body></body></html>"
+    errors, _ = lint_html(html, {"charts": []})
+    assert errors == [], errors
+
+
 def test_lint_html_still_rejects_undeclared_chart_id():
     # Regression pin: the manifest-backed path keeps its declared-id
     # check even though standalone mode relaxes it.
