@@ -1421,6 +1421,9 @@ class _Linter(HTMLParser):
         second._in_noscript = True
         second._noscript_reading = True
         second._allowed_remaining = self._allowed_remaining
+        # Share the lazily read Chart.js bundle both ways, so a page of
+        # many noscripts reads it once, not once per noscript.
+        second._chart_lib_cache = self._chart_lib_cache
         second.feed("".join(parts))
         # The captured text ends at the first </noscript>, but a
         # scripting-disabled reader does not stop there when that text
@@ -1440,6 +1443,7 @@ class _Linter(HTMLParser):
                 "fail closed"
             )
         second.close()
+        self._chart_lib_cache = second._chart_lib_cache
         self.errors.extend(second.errors)
         self.warnings.extend(second.warnings)
 
