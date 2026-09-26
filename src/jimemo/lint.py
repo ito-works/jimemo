@@ -1422,6 +1422,23 @@ class _Linter(HTMLParser):
         second._noscript_reading = True
         second._allowed_remaining = self._allowed_remaining
         second.feed("".join(parts))
+        # The captured text ends at the first </noscript>, but a
+        # scripting-disabled reader does not stop there when that text
+        # leaves a raw-text element open (<noscript><style></noscript>
+        # @import ...</style>) or ends inside an unfinished tag
+        # (<img alt="</noscript>" src=...>): it carries on past the
+        # </noscript> into markup the live reading took as something
+        # else, so neither reading judged what it sees. Fail closed.
+        # Held-back plain text (a trailing "&amp" waiting for more)
+        # never starts with "<": html.parser flushes the text before a
+        # "<" before it buffers the construct.
+        if second.cdata_elem is not None or second.rawdata.startswith("<"):
+            self.errors.append(
+                "<noscript> content ends inside an unfinished element "
+                "or tag — a browser with scripting off carries it past "
+                "</noscript>, so the page it reads cannot be confirmed; "
+                "fail closed"
+            )
         second.close()
         self.errors.extend(second.errors)
         self.warnings.extend(second.warnings)
