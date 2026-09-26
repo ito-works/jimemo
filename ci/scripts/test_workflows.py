@@ -138,9 +138,9 @@ def step(text, name):
     return m.group(1) if m else ""
 
 
-def kata_projects_bound(text):
-    """True when `tell kata`'s env carries KATA_PROJECTS from the variable."""
-    block = step(text, "tell kata")
+def kata_projects_bound(text, step_name="tell kata"):
+    """True when the named step's env carries KATA_PROJECTS from the variable."""
+    block = step(text, step_name)
     env = re.search(r"^        env:\n((?:^          .*\n|^\s*#.*\n)*)", block, re.M)
     return bool(env and re.search(
         r"^          KATA_PROJECTS: \$\{\{ vars\.KATA_PROJECTS \}\}$", env.group(1), re.M))
@@ -396,6 +396,23 @@ class KataBridgeEntryPoints(unittest.TestCase):
         m = re.search(r"  pull_request_target:\n    types: \[([^\]]*)\]", self.text)
         self.assertIsNotNone(m)
         self.assertEqual(m.group(1).strip(), "dequeued")
+
+
+class ReviewEvidenceEntryPoint(unittest.TestCase):
+    """review_evidence.py refuses a body whose kata project is not declared,
+    and refuses everything while KATA_PROJECTS is unset (kata jibot-code#ajqt).
+    The Python tests pass the variable in directly, so this pins the line that
+    carries it to the step that runs the verifier."""
+
+    def test_the_repository_declares_its_kata_projects(self):
+        text = read("review-evidence.yml")
+        self.assertTrue(kata_projects_bound(text, "verify and publish"))
+        for broken in (
+                text.replace("          KATA_PROJECTS:", "          # KATA_PROJECTS:"),
+                text.replace("        env:\n", "        env:\n          X: y\n"
+                             "      - name: other\n        env:\n", 1)):
+            self.assertNotEqual(broken, text)
+            self.assertFalse(kata_projects_bound(broken, "verify and publish"))
 
 
 class CheckName(unittest.TestCase):
