@@ -2989,6 +2989,26 @@ def test_noscript_content_carried_past_end_tag_when_scripting_off_fails_closed(i
     assert any("scripting off" in e for e in errors), errors
 
 
+def test_many_noscript_scripts_read_the_chart_bundle_once(monkeypatch):
+    # Each noscript is judged by a second _Linter; they must share the
+    # outer linter's Chart.js cache rather than re-read the bundle each.
+    import jimemo.lint as lint_mod
+    calls = []
+
+    def counting(path):
+        calls.append(path)
+        return chart_lib_inline_text(path)
+
+    monkeypatch.setattr(lint_mod, "chart_lib_inline_text", counting)
+    html = (
+        "<html><body>"
+        + "<noscript><script></script></noscript>" * 5
+        + "<script></script></body></html>"
+    )
+    lint_mod.lint_standalone(html)
+    assert len(calls) == 1, calls
+
+
 def test_noscript_text_ending_in_bare_charref_passes():
     # html.parser holds back trailing text after "&" for more input;
     # that is text, not an unfinished tag.
