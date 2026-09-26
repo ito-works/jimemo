@@ -1142,6 +1142,20 @@ class _Linter(HTMLParser):
         self._containers: List[str] = []
         self._container_counts: Dict[str, int] = {}
         self._in_noscript = False
+        # Buffers an open <noscript>'s RAW TEXT -- what a scripting-
+        # enabled browser reads to the first </noscript> (html.parser
+        # would otherwise parse it as markup, letting a <style> opened
+        # inside switch the parser itself into raw-text mode and
+        # swallow the live tags after </noscript>, jimemo#yzm0) -- for
+        # the second reading in _flush_noscript. None while no noscript
+        # is open; a second reading never opens one (it starts inside
+        # a noscript, so _open_container stays a no-op throughout).
+        self._noscript_parts: Optional[List[str]] = None
+        # True while this linter IS a second reading (see
+        # _flush_noscript): it draws from the outer linter's exact-mode
+        # allowlist multiset but owns no completeness verdict of its
+        # own -- close() skips them, the outer linter reports them.
+        self._noscript_reading = False
         # The inert container the current <script> sits in ("template"
         # or "noscript"), or None when it is live; set in _check_tag
         # alongside _current_script_seq.
@@ -1178,7 +1192,15 @@ class _Linter(HTMLParser):
                 self._push_container("foreign:" + tag)
             return
         if tag == "noscript":
+            # Scripting ON: read everything to the first </noscript> as
+            # raw text -- html.parser's own cdata mode, which ends
+            # exactly there (parse_endtag clears it on that end tag
+            # alone) -- instead of parsing it as markup. The captured
+            # text is judged a second time as markup by
+            # _flush_noscript when the element closes.
             self._in_noscript = True
+            self._noscript_parts = []
+            self.set_cdata_mode("noscript")
         else:
             self._push_container("template")
 
@@ -1236,9 +1258,13 @@ class _Linter(HTMLParser):
             self._flush_style()
         elif tag == "script":
             self._flush_script()
+        elif tag == "noscript":
+            self._flush_noscript()
 
     def handle_data(self, data):
-        if self._style_parts is not None:
+        if self._noscript_parts is not None:
+            self._noscript_parts.append(data)
+        elif self._style_parts is not None:
             self._style_parts.append(data)
         elif self._script_parts is not None:
             self._script_parts.append(data)
@@ -1247,7 +1273,15 @@ class _Linter(HTMLParser):
         super().close()
         self._flush_style()
         self._flush_script()
-        if self._allowed_remaining is not None:
+        # Reaching close() with an open noscript means no </noscript>
+        # ever came: the raw text ran to the end of the document.
+        self._flush_noscript(terminated=False)
+        # A second reading (see _flush_noscript) shares the allowlist
+        # multiset but owns no completeness verdict of its own: the
+        # outer linter alone reports what the whole page is missing,
+        # over the multiset both readings consumed from.
+        if (self._allowed_remaining is not None
+                and not self._noscript_reading):
             # Exact mode's third failure class: every renderer-emitted
             # body must actually appear. A chart page whose template
             # dropped the library or an init script is not the page the
@@ -1347,6 +1381,50 @@ class _Linter(HTMLParser):
         self._script_parts = None
         script_type, self._script_type = self._script_type, _NO_TYPE
         self._check_script_body(body, script_type)
+
+    def _flush_noscript(self, terminated: bool = True) -> None:
+        """Judge an open <noscript>'s captured raw text a SECOND time,
+        as the markup a scripting-disabled reader parses (jimemo#yzm0).
+
+        The live, scripting-on reading is the one this linter just
+        made: raw text to the first </noscript> is all such a browser
+        ever sees inside the element, so the tags html.parser would
+        have found there cannot hide anything from the checks that
+        follow it. The second reading runs every per-tag rule again --
+        a remote reference is an error in whichever reading sees it --
+        but starts out inside a noscript, so ids, canvases and chart
+        scripts it finds never count toward chart completeness
+        (jimemo#7tz4), and in exact mode it consumes from the SAME
+        renderer-emitted multiset the live reading consumes (a matched
+        body still errors as a chart script inside <noscript>, an
+        unmatched one as unexpected), with no completeness verdicts of
+        its own."""
+        parts = self._noscript_parts
+        if parts is None:
+            return
+        self._noscript_parts = None
+        self._in_noscript = False
+        if not terminated:
+            # No </noscript> before the end of the document: everything
+            # after the start tag is raw text to a scripting-enabled
+            # reader, so which reading any later markup belongs to
+            # cannot be settled. Fail closed rather than pick one.
+            self.errors.append(
+                "unterminated <noscript> — with scripting on, a browser "
+                "reads the rest of the page as raw text inside it, so "
+                "the live page cannot be confirmed; fail closed"
+            )
+        second = _Linter(
+            charts_declared=self.charts_declared,
+            chart_ids=self.chart_ids,
+        )
+        second._in_noscript = True
+        second._noscript_reading = True
+        second._allowed_remaining = self._allowed_remaining
+        second.feed("".join(parts))
+        second.close()
+        self.errors.extend(second.errors)
+        self.warnings.extend(second.warnings)
 
     def _chart_lib(self) -> Optional[str]:
         """The vendored Chart.js bundle text in its INLINED form (same
