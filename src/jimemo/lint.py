@@ -63,6 +63,10 @@ foreign content is an error — markup this lint can no longer see. An
 escaped ``&lt;`` decodes to ``<`` before the check sees it and is
 rejected with it rather than told apart (accepted over-rejection:
 jimemo chart titles never need a literal ``<``), and the error says so.
+HTML integration points (``<foreignObject>``, MathML ``<mi>``/``<mtext>``),
+where a browser is back in the HTML namespace and the title IS text, are
+not modelled, so a ``<`` there is rejected too -- over-rejection that
+fails closed. A ``<noscript>``'s second reading applies the same rule.
 
 Separate from the fetch allowlist, execution checks remain: ``on*``
 attributes and ``javascript:``/``vbscript:`` URLs are never allowed
@@ -1139,7 +1143,8 @@ class _Linter(HTMLParser):
         # entry is popped once, so tracking stays linear in the page. noscript content is raw
         # text to such a browser, so while one is open no tag opens or
         # closes anything until the first </noscript>, and a second
-        # <noscript> in it does not nest. While a template or noscript
+        # <noscript> in it does not nest; its second reading tracks only
+        # svg and math. While a template or noscript
         # is open, _check_tag skips the id/canvas bookkeeping
         # and a script's container is recorded for _check_script_body.
         #
@@ -1201,11 +1206,15 @@ class _Linter(HTMLParser):
         # content a self-closing <template/> or <noscript/> opens the
         # element all the same (a browser ignores the slash on a
         # non-void element); in foreign content the slash is honoured.
-        if self._in_noscript:
-            return
+        # svg/math are tracked even inside a noscript: the live reading
+        # sees no tags there (cdata mode), but a second reading
+        # (_flush_noscript) parses the captured text as markup and
+        # needs to know when it is in foreign content (jimemo#cg2h).
         if tag in ("svg", "math"):
             if not self_closing:
                 self._push_container(tag)
+            return
+        if self._in_noscript:
             return
         if tag not in ("template", "noscript"):
             return
@@ -1231,7 +1240,7 @@ class _Linter(HTMLParser):
         self._container_counts[name] = self._container_counts.get(name, 0) + 1
 
     def _close_container(self, tag: str) -> None:
-        if self._in_noscript:
+        if self._in_noscript and tag not in ("svg", "math"):
             if tag == "noscript":
                 self._in_noscript = False
             return
