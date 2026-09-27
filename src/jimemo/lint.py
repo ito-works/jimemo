@@ -1170,7 +1170,8 @@ class _Linter(HTMLParser):
         # swallow the live tags after </noscript>, jimemo#yzm0) -- for
         # the second reading in _flush_noscript. None while no noscript
         # is open; a second reading never opens one (it starts inside
-        # a noscript, so _open_container stays a no-op throughout).
+        # a noscript, so _open_container opens nothing but svg/math
+        # throughout).
         self._noscript_parts: Optional[List[str]] = None
         # True while this linter IS a second reading (see
         # _flush_noscript): it draws from the outer linter's exact-mode
