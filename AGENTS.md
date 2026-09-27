@@ -83,12 +83,11 @@ keyed by slot name — then hand it to `jimemo render`.
 
 - **Self-contained output.** A rendered `out.html` inlines its CSS and
   images and fetches nothing at view time; open it directly in a
-  browser or hand it to someone with no server involved. One known
-  exception, tracked in jimemo#cg2h: `jimemo check` cannot see inside a
-  `<title>` or `<textarea>` nested in `<svg>`/`<math>`, because
-  `html.parser` hands that content over as text while a browser reads it
-  as markup, so a resource reference hidden there is neither reported nor
-  inlined.
+  browser or hand it to someone with no server involved. `jimemo check`
+  rejects any `<` inside a `<title>` or `<textarea>` nested in
+  `<svg>`/`<math>` (jimemo#cg2h): `html.parser` reads that content as
+  text while a browser reads it as markup, so it fails closed rather
+  than trust what it cannot see.
 - **No network at render time.** Plain `jimemo render` never shells out
   or hits the network. The exceptions: `jimemo publish` (and
   `import-design`'s use of local files) touch the network; the explicit

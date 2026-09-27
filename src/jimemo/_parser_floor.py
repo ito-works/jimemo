@@ -77,8 +77,9 @@ divergence is known to REMAIN on every supported interpreter:
   text node and jimemo's self-containment scan never sees it. Confirmed
   against Chromium. NOT a consequence of retiring the y9p8 guard (it is live
   on any 3.13.4+, including every current fleet Mac) and NOT fixed here:
-  filed as jimemo#cg2h with the payloads and the evidence, because it needs a
-  lint rule with its own false-positive analysis.
+  lint compensates instead (jimemo#cg2h) -- any ``<`` in the data of a
+  ``title``/``textarea`` inside ``<svg>``/``<math>`` is an error, an escaped
+  ``&lt;`` included, so the divergence fails closed.
 """
 import sys
 

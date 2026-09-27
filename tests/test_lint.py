@@ -3184,6 +3184,43 @@ def test_html_namespace_title_and_textarea_are_unchanged():
     assert errors == [], errors
 
 
+@pytest.mark.parametrize(
+    "payload",
+    [
+        "<noscript><svg><title>"
+        "<style>a{background:url(https://evil.example/p)}</style>"
+        "</title></svg></noscript>",
+        "<noscript><math><textarea><img src=https://evil.example/p>"
+        "</textarea></math></noscript>",
+    ],
+    ids=["svg-title", "math-textarea"],
+)
+def test_markup_inside_foreign_title_in_noscript_errors(payload):
+    # A scripting-off reader parses noscript content as markup, so the
+    # second reading (jimemo#wxh6) must track svg/math too and apply the
+    # same foreign-RCDATA rule (jimemo#cg2h).
+    errors, _ = _lint(payload)
+    assert any("remove the '<'" in e for e in errors), errors
+
+
+def test_plain_text_foreign_title_in_noscript_passes():
+    errors, _ = _lint("<noscript><svg><title>Chart</title></svg></noscript>")
+    assert errors == [], errors
+
+
+def test_title_at_html_integration_point_fails_closed():
+    # Deliberate over-rejection: at an HTML integration point
+    # (<foreignObject>, MathML <mi>) a browser is back in the HTML
+    # namespace and reads <title> as text, but integration points are
+    # not modelled (see _Linter), so a '<' there still errors.
+    for html in (
+        "<svg><foreignObject><title>a &lt; b</title></foreignObject></svg>",
+        "<math><mi><textarea>a &lt; b</textarea></mi></math>",
+    ):
+        errors, _ = _lint(html)
+        assert errors, html
+
+
 def test_lint_html_still_rejects_undeclared_chart_id():
     # Regression pin: the manifest-backed path keeps its declared-id
     # check even though standalone mode relaxes it.
