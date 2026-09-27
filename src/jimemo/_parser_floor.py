@@ -78,7 +78,7 @@ divergence is known to REMAIN on every supported interpreter:
   against Chromium. NOT a consequence of retiring the y9p8 guard (it is live
   on any 3.13.4+, including every current fleet Mac) and NOT fixed here:
   lint compensates instead (jimemo#cg2h) -- any ``<`` in the data of a
-  ``title``/``textarea`` inside ``<svg>``/``<math>`` is an error, an escaped
+  ``title``/``textarea`` in or after an ``<svg>``/``<math>`` is an error, an escaped
   ``&lt;`` included, so the divergence fails closed.
 """
 import sys

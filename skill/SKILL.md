@@ -93,8 +93,9 @@ jimemo render auto <content-file> -o out.html
 skipped and why) to stderr — read that if the result looks wrong. The
 output is always one self-contained HTML file: CSS and images inlined,
 nothing fetched at view time. Nothing further needs bundling to share it.
-(`jimemo check` rejects any `<` inside an `<svg>`/`<math>` `<title>` or
-`<textarea>`, even an escaped `&lt;`: keep those texts free of `<`.)
+(`jimemo check` rejects any `<` inside a `<title>` or `<textarea>` in or
+after an `<svg>`/`<math>`, even an escaped `&lt;`: keep those texts free
+of `<`.)
 
 ### 4b. Iterate locally (draft mode)
 
