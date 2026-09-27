@@ -66,7 +66,11 @@ jimemo chart titles never need a literal ``<``), and the error says so.
 HTML integration points (``<foreignObject>``, MathML ``<mi>``/``<mtext>``),
 where a browser is back in the HTML namespace and the title IS text, are
 not modelled, so a ``<`` there is rejected too -- over-rejection that
-fails closed. A ``<noscript>``'s second reading applies the same rule.
+fails closed. Nor is which elements a browser's end tags close (it
+ignores ``</svg>`` while an HTML element inside ``<foreignObject>`` is
+current), so the rule covers every ``<title>``/``<textarea>`` from the
+first ``<svg>``/``<math>`` on, not only those this linter thinks are
+still inside one. A ``<noscript>``'s second reading applies the same rule.
 
 Separate from the fetch allowlist, execution checks remain: ``on*``
 attributes and ``javascript:``/``vbscript:`` URLs are never allowed
@@ -1183,6 +1187,16 @@ class _Linter(HTMLParser):
         # instead of trusting text the browser executes (see the module
         # docstring's third gate).
         self._foreign_rcdata: Optional[str] = None
+        # True once any <svg>/<math> has opened, and never reset. Which
+        # elements a browser's end tags actually close is not modelled:
+        # it ignores </svg> while an HTML element inside <foreignObject>
+        # is current, where _close_container pops the svg, so a later
+        # <title> can be foreign to the browser and HTML to this
+        # linter. The rule above therefore covers every title/textarea
+        # from the first foreign container on (over-rejection that fails
+        # closed; jimemo templates carry neither element in the body).
+        # A noscript's second reading inherits it.
+        self._foreign_seen = False
         # The inert container the current <script> sits in ("template"
         # or "noscript"), or None when it is live; set in _check_tag
         # alongside _current_script_seq.
@@ -1213,6 +1227,7 @@ class _Linter(HTMLParser):
         if tag in ("svg", "math"):
             if not self_closing:
                 self._push_container(tag)
+                self._foreign_seen = True
             return
         if self._in_noscript:
             return
@@ -1263,10 +1278,12 @@ class _Linter(HTMLParser):
     def handle_starttag(self, tag, attrs):
         self._check_tag(tag, attrs)
         self._open_container(tag, self_closing=False)
-        if tag in ("title", "textarea") and self._in_foreign():
+        if tag in ("title", "textarea") and self._foreign_seen:
             # In foreign content a browser parses this element's
             # content as ordinary markup, but html.parser is about to
-            # read it as RCDATA text — remember it for handle_data. A
+            # read it as RCDATA text — remember it for handle_data.
+            # Judged from the first <svg>/<math> on, not only while
+            # _in_foreign(): see _foreign_seen. A
             # self-closing <title/>/<textarea/> never enters that mode
             # (the slash is honoured in foreign content) and sets
             # nothing, via handle_startendtag never reaching here.
@@ -1293,13 +1310,8 @@ class _Linter(HTMLParser):
 
     def handle_endtag(self, tag):
         self._close_container(tag)
-        if self._foreign_rcdata is not None and (
-            tag == self._foreign_rcdata or not self._in_foreign()
-        ):
-            # The matching end tag closes it; an end tag that closed the
-            # foreign container around it (a mis-nested </svg>) closes
-            # it too, so later data outside the container is not judged
-            # as title text.
+        if tag == self._foreign_rcdata:
+            # html.parser leaves RCDATA only at the matching end tag.
             self._foreign_rcdata = None
         if tag == "style":
             self._flush_style()
@@ -1319,9 +1331,9 @@ class _Linter(HTMLParser):
             # so it is rejected with the real markup (accepted
             # over-rejection; the message says to drop the '<').
             self.errors.append(
-                f"a '<' inside <svg>/<math> <{self._foreign_rcdata}> "
-                "content — this parser reads a <title>/<textarea> as "
-                "text even in foreign content, but a browser parses "
+                f"a '<' inside a <{self._foreign_rcdata}> in or after "
+                "<svg>/<math> — this parser reads a <title>/<textarea> "
+                "as text even in foreign content, but a browser parses "
                 "the same bytes as live markup this check never sees; "
                 f"remove the '<' from the <{self._foreign_rcdata}> "
                 "text (an escaped '&lt;' decodes to '<' before this "
@@ -1485,6 +1497,7 @@ class _Linter(HTMLParser):
         )
         second._in_noscript = True
         second._noscript_reading = True
+        second._foreign_seen = self._foreign_seen
         second._allowed_remaining = self._allowed_remaining
         # Share the lazily read Chart.js bundle both ways, so a page of
         # many noscripts reads it once, not once per noscript.

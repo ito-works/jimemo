@@ -3221,6 +3221,39 @@ def test_title_at_html_integration_point_fails_closed():
         assert errors, html
 
 
+@pytest.mark.parametrize(
+    "payload",
+    [
+        # A browser ignores the first </svg> (an HTML <div> is current
+        # inside <foreignObject>), so the <title> is an SVG title with a
+        # live <script>; the container stack has already popped the svg.
+        "<svg><foreignObject><div></svg></div></foreignObject>"
+        "<title><script>new Image().src='http://e.x/c'</script></title>"
+        "</svg>",
+        "<math><mi><div></math></div></mi>"
+        "<textarea><img src=https://evil.example/p></textarea></math>",
+        # The same shape reaching a noscript the linter reads as HTML.
+        "<svg><foreignObject><div></svg></div></foreignObject>"
+        "<noscript><title><img src=https://evil.example/p></title>"
+        "</noscript></svg>",
+    ],
+    ids=["svg-ignored-end-tag", "math-ignored-end-tag", "noscript"],
+)
+def test_foreign_title_after_ignored_end_tag_errors(payload):
+    errors, _ = _lint(payload)
+    assert any("remove the '<'" in e for e in errors), errors
+
+
+def test_title_or_textarea_after_closed_svg_fails_closed():
+    # Deliberate over-rejection: the linter does not model which end
+    # tags a browser honours, so every title/textarea after the first
+    # <svg>/<math> is judged, even one a browser reads as HTML text.
+    errors, _ = _lint("<svg></svg><textarea>a &lt; b</textarea>")
+    assert errors
+    errors, _ = _lint("<textarea>a &lt; b</textarea><svg></svg>")
+    assert errors == [], errors
+
+
 def test_lint_html_still_rejects_undeclared_chart_id():
     # Regression pin: the manifest-backed path keeps its declared-id
     # check even though standalone mode relaxes it.

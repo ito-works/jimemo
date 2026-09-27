@@ -84,7 +84,7 @@ keyed by slot name — then hand it to `jimemo render`.
 - **Self-contained output.** A rendered `out.html` inlines its CSS and
   images and fetches nothing at view time; open it directly in a
   browser or hand it to someone with no server involved. `jimemo check`
-  rejects any `<` inside a `<title>` or `<textarea>` nested in
+  rejects any `<` inside a `<title>` or `<textarea>` in or after an
   `<svg>`/`<math>` (jimemo#cg2h): `html.parser` reads that content as
   text while a browser reads it as markup, so it fails closed rather
   than trust what it cannot see.

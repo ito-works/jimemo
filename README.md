@@ -508,7 +508,7 @@ are in [`docs/publish-setup.md`](docs/publish-setup.md).
 - **Self-contained output.** A rendered `out.html` inlines its CSS and
   images; nothing is fetched when it's opened. Hand it to anyone with
   no server involved. `jimemo check` rejects any `<` inside a `<title>`
-  or `<textarea>` nested in `<svg>`/`<math>` (jimemo#cg2h): Python's
+  or `<textarea>` in or after an `<svg>`/`<math>` (jimemo#cg2h): Python's
   `html.parser` reads that content as text while a browser reads it as
   markup, so the check fails closed rather than trust what it cannot see.
 - **No network at view or render time.** `jimemo render` never shells
