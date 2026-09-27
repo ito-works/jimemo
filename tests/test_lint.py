@@ -3236,8 +3236,19 @@ def test_title_at_html_integration_point_fails_closed():
         "<svg><foreignObject><div></svg></div></foreignObject>"
         "<noscript><title><img src=https://evil.example/p></title>"
         "</noscript></svg>",
+        # Foreign content opened INSIDE a noscript: a scripting-off
+        # reader ignores the </noscript> (an HTML <div> is current) and
+        # is still in the svg when the <title> arrives.
+        "<noscript><svg><foreignObject><div></noscript>"
+        "</div></foreignObject>"
+        "<title><img src=https://evil.example/p></title></svg>",
     ],
-    ids=["svg-ignored-end-tag", "math-ignored-end-tag", "noscript"],
+    ids=[
+        "svg-ignored-end-tag",
+        "math-ignored-end-tag",
+        "noscript",
+        "foreign-opened-in-noscript",
+    ],
 )
 def test_foreign_title_after_ignored_end_tag_errors(payload):
     errors, _ = _lint(payload)

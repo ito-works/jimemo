@@ -1195,7 +1195,7 @@ class _Linter(HTMLParser):
         # linter. The rule above therefore covers every title/textarea
         # from the first foreign container on (over-rejection that fails
         # closed; jimemo templates carry neither element in the body).
-        # A noscript's second reading inherits it.
+        # A noscript's second reading inherits it and hands it back.
         self._foreign_seen = False
         # The inert container the current <script> sits in ("template"
         # or "noscript"), or None when it is live; set in _check_tag
@@ -1522,6 +1522,10 @@ class _Linter(HTMLParser):
             )
         second.close()
         self._chart_lib_cache = second._chart_lib_cache
+        # Foreign content first opened inside the noscript counts for
+        # the rest of the page too: a scripting-off reader can stay in
+        # it past </noscript> (an ignored end tag, see _foreign_seen).
+        self._foreign_seen = self._foreign_seen or second._foreign_seen
         self.errors.extend(second.errors)
         self.warnings.extend(second.warnings)
 
