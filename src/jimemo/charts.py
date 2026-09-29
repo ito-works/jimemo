@@ -319,14 +319,17 @@ _THEME_RUNTIME_JS = _THEME_RUNTIME_HEAD_JS + _THEME_RUNTIME_TAIL_JS
 # `<details class="jm-chart-data">` right after it is `open`, so a
 # reader that disables or CSP-blocks scripts shows the table and no
 # empty canvas box. The runtime's first statement unhides the canvas
-# (before Chart.js measures it); the statement right after `new Chart`
+# (before Chart.js measures it) -- unless Chart.js itself never loaded
+# (a browser that cannot run the bundle), in which case the runtime
+# stops there and the page stays exactly as a script-free reader sees
+# it; the statement right after `new Chart`
 # -- before any theme listener is registered, so a failure there cannot
 # strand an open duplicate under a drawn chart -- collapses that details
 # to its one-line summary. If the construction throws, the table stays
 # open. A canvas with no table
 # (a template calling ui.chart without data) has no `hidden` to clear
 # and no such sibling, so both statements are no-ops there.
-_FALLBACK_OPEN_JS = "el.hidden=!1;"
+_FALLBACK_OPEN_JS = "if(typeof Chart!=\"function\")return;el.hidden=!1;"
 _FALLBACK_CLOSE_JS = (
     "var f=el.nextElementSibling;"
     "if(f&&f.classList.contains(\"jm-chart-data\"))f.open=!1;"

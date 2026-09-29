@@ -95,7 +95,10 @@ with no render context) the check falls back to STRUCTURAL recognition
 of the two renderer-emitted byte shapes: the vendored Chart.js bundle
 (byte-compared against the file at CHARTJS_BUNDLE, read lazily at lint
 time) and, per declared chart, an init in exactly the shape
-charts.chart_init_js builds, whose id the manifest declares, whose
+charts.chart_init_js builds (or one of the two older generations
+parse_chart_init_js still recognizes so pages from earlier jimemo
+versions pass: the jimemo#7n1f theme runtime and the bare pre-7n1f
+``new Chart(...)``), whose id the manifest declares, whose
 config contains no raw ``<`` (the serializer u003c-escapes every one),
 and whose config parses as JSON — pure data, never code. The
 structural mode cannot tell a hand-forged-but-well-shaped init from
@@ -1556,7 +1559,8 @@ class _Linter(HTMLParser):
         so even a well-shaped hand-forged init with different config
         bytes fails. In the structural fallback (no render context) a
         body is legal in exactly two byte shapes — the vendored
-        Chart.js bundle, or a charts.chart_init_js body whose id the
+        Chart.js bundle, or a body parse_chart_init_js recognizes (the
+        current chart_init_js shape or an older one) whose id the
         manifest declares and whose config argument is the
         safe-serialized JSON (no raw "<", parses as JSON: data, never
         code). Either way the allowlist is scripts the RENDERER emits,

@@ -180,7 +180,9 @@
     autoescape entity-encodes it, which lint then rejects as an
     unexpected inline script — fail closed, never an injection. chart_id
     is the manifest-validated chart id (\A[a-zA-Z][\w-]*\Z), safe as a
-    DOM id. No other content data may enter this macro. -#}
+    DOM id. The only other content data this macro takes is the
+    optional fallback table (data, title): ordinary autoescaped text in
+    HTML elements, never inside the <script>. -#}
 {#- chart: the canvas and its init script. With data ({labels, series:
     [{name, values}]}, the renderer's c.data) it is static-first
     (jimemo#s3e6): the canvas starts hidden and an open "Chart data"
