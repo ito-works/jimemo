@@ -19,13 +19,23 @@ set -euo pipefail
 out=${1:?usage: shots.sh OUT_DIR}
 here=$(cd "$(dirname "$0")" && pwd)
 repo=$(cd "$here/../../.." && pwd)
+created=0
+[ -d "$out" ] || { mkdir -p "$out"; created=1; }
+out=$(cd "$out" && pwd -P)
+case "$out/" in
+  "$(cd "$repo" && pwd -P)/"*)
+    [ "$created" = 1 ] && rmdir "$out"
+    echo "OUT_DIR $out is inside the repo; pick a directory outside it" >&2
+    exit 2 ;;
+esac
 chrome=${CHROME:-"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"}
 [ -x "$chrome" ] || { echo "no browser at $chrome (set CHROME)" >&2; exit 1; }
-mkdir -p "$out"
-out=$(cd "$out" && pwd)
 manifest="$out/manifest.txt"
 
-jimemo() { python3 "$repo/jimemo" "$@"; }
+# The interpreter install.sh would bind (>= 3.13.6); override with
+# JIMEMO_PYTHON. A stock macOS python3 is too old for jimemo.
+py=${JIMEMO_PYTHON:-python3}
+jimemo() { "$py" "$repo/jimemo" "$@"; }
 
 {
   echo "jimemo: $(jimemo --version)"
@@ -46,6 +56,8 @@ import sys
 src, dst = sys.argv[1], sys.argv[2]
 html = open(src, encoding="utf-8").read()
 meta = '<meta http-equiv="Content-Security-Policy" content="script-src \'none\'">'
+if html.count("<head>") != 1:
+    sys.exit(f"{src}: expected exactly one <head> to carry the CSP meta")
 open(dst, "w", encoding="utf-8").write(html.replace("<head>", "<head>\n" + meta, 1))
 PY
   for mode in on off zoom csp; do

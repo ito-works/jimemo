@@ -17,6 +17,7 @@ render step passes them through unescaped; every other slot value is
 returned as parsed/raw and relies on Jinja2 autoescape for safety.
 """
 import json
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
@@ -47,11 +48,46 @@ def markdown_extensions() -> list:
     return [TableExtension(), FencedCodeExtension()]
 
 
+_TABLE_TAG_RE = re.compile(r"</?table>")
+TABLE_SCROLL_OPEN = '<div class="jm-prose__table-scroll">'
+
+
+def _wrap_tables(html: str) -> str:
+    """Wrap each top-level ``<table>`` in a scroll box (jimemo#s3e6), so a
+    table wider than a phone scrolls inside it instead of widening the
+    page (which made a phone zoom out until the prose was unreadable).
+    A wrapper keeps the table a real table to assistive tech, which
+    ``display: block`` on the table itself may not. The sanitizer
+    serializes every table tag as exactly ``<table>``/``</table>`` but
+    can pass an unclosed or stray one through; any imbalance leaves the
+    whole fragment unwrapped, so a wrapper never closes an element the
+    fragment did not open."""
+    depth = 0
+    for match in _TABLE_TAG_RE.finditer(html):
+        depth += -1 if match.group(0) == "</table>" else 1
+        if depth < 0:
+            return html
+    if depth != 0:
+        return html
+
+    def wrap(match: "re.Match[str]") -> str:
+        nonlocal depth
+        if match.group(0) == "<table>":
+            depth += 1
+            return TABLE_SCROLL_OPEN + "<table>" if depth == 1 else "<table>"
+        depth -= 1
+        return "</table></div>" if depth == 0 else "</table>"
+
+    return _TABLE_TAG_RE.sub(wrap, html)
+
+
 def _render_markdown(text: str) -> Markup:
     # Sole markdown->HTML path (top-level markdown slots AND markdown
     # items in data slots), so sanitizing here covers both. Runs before
     # inline_images, so authored img src are still paths/URLs.
-    return Markup(sanitize_html(markdown.markdown(text, extensions=markdown_extensions())))
+    return Markup(_wrap_tables(
+        sanitize_html(markdown.markdown(text, extensions=markdown_extensions()))
+    ))
 
 
 def _coerce_text(path: Path, slot_name: str, value: Any) -> str:
