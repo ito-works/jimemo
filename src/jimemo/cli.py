@@ -441,7 +441,7 @@ def _do_render(
             print(NO_BROWSER_MESSAGE, file=sys.stderr)
             return 1
 
-    svg_sources: list = []
+    svg_sources: list[Path] = []
     try:
         manifest = load_manifest(template_dir)
         content = load_content(content_path, manifest)

@@ -21,6 +21,7 @@ from jimemo.content import load_content
 from jimemo.errors import ContentError
 from jimemo.lint import lint_html
 from jimemo.manifest import load_manifest
+from jimemo import render
 from jimemo.render import SVG_IMAGE_STYLE, _splice_svg_images, render_page
 from markupsafe import Markup  # vendored; importing jimemo.render adds it
 
@@ -33,6 +34,11 @@ GOOD_SVG = (
     'style="fill:var(--jm-accent);stroke:var(--jm-border)"/>'
     '<text x="20" y="40" style="fill:var(--jm-text)">Flow</text>'
     "</svg>"
+)
+
+TINY_PNG = bytes.fromhex(
+    "89504e470d0a1a0a0000000d4948445200000001000000010806000000"
+    "1f15c4890000000d49444154789c6360000002000154a24f5d0000000049454e44ae426082"
 )
 
 # A harmless sibling every payload test must keep.
@@ -294,6 +300,12 @@ def test_svg_stays_refused_in_srcset_source_and_poster(tmp_path, markup):
     "<title/><img src=d.svg>",
     "<svg><img src=d.svg></svg>",
     "<plaintext><img src=d.svg>",
+    "<iframe><img src=d.svg></iframe>",
+    "<math><img src=d.svg></math>",
+    "<noscript/><img src=d.svg>",
+    '<img src="DATA:image/svg+xml,x.svg">',
+    '<img src="http&colon;//[.png">',
+    '<img src="http&colon;//[.svg">',
     "<p>no image at all</p>",
     '<img src="a.png" alt="raster">',
 ])
@@ -318,12 +330,25 @@ def test_offsets_hold_across_line_ends_and_non_ascii(tmp_path):
     assert out.endswith("</svg></span></p>\n")
 
 
-def test_page_without_svg_image_is_unchanged(tmp_path):
-    body = "Before.\n\n## A heading\n\nText.\n"
-    content = _content(tmp_path, body)
-    baseline = render_page(BRIEFING_DIR, content, base_dir=tmp_path)
-    assert "<svg" not in baseline and SVG_IMAGE_STYLE not in baseline
-    assert _splice_svg_images(baseline, tmp_path) == (baseline, [])
+def test_raster_page_renders_exactly_as_without_the_new_step(tmp_path, monkeypatch):
+    (tmp_path / "p.png").write_bytes(TINY_PNG)
+    content = _content(tmp_path, "Before.\n\n![p](p.png)\n\n## A heading\n")
+    html = render_page(BRIEFING_DIR, content, base_dir=tmp_path)
+    monkeypatch.setattr(render, "_splice_svg_images", lambda h, b, s=None: (h, []))
+    assert render_page(BRIEFING_DIR, content, base_dir=tmp_path) == html
+    assert "data:image/png;base64," in html and SVG_IMAGE_STYLE not in html
+
+
+def test_malformed_url_is_refused_cleanly_not_a_traceback(tmp_path):
+    # The decoded src is http://[.svg, which urlsplit refuses; the tag is
+    # left for inline_images, which refuses the .svg as before.
+    with pytest.raises(ContentError, match="image type"):
+        _template_render(tmp_path, '<img src="http&colon;//[.svg">')
+
+
+def test_blank_alt_is_decorative(tmp_path):
+    html = _render(tmp_path, "![ ](d.svg)\n", {"d.svg": GOOD_SVG})
+    assert _span(html).startswith('<span aria-hidden="true" style=')
 
 
 # --- the CLI does not overwrite a source SVG --------------------------------
