@@ -26,7 +26,9 @@ _BUILTIN_THEME_MODES = {"light", "dark"}
 # is_allowed_image_data_uri: a local .svg could only ever produce a
 # data:image/svg+xml URI that lint rejects anyway (SVG can carry
 # markup/script), so it's rejected here, earlier and with a clearer
-# message.
+# message. A markdown image of a local .svg never gets this far:
+# render._splice_svg_images replaces it with sanitized inline SVG first
+# (docs/diagrams.md); any .svg still here is one it did not admit.
 _MIME_BY_EXT = {
     ".png": "image/png",
     ".jpg": "image/jpeg",
@@ -182,6 +184,36 @@ def _is_remote(src: str) -> bool:
     return urlsplit(src).scheme in ("http", "https")
 
 
+def resolve_local_image(url: str, base_dir: Path) -> Tuple[Optional[Path], Optional[str]]:
+    """``(path, None)`` for a relative image path that stays inside
+    `base_dir` once ``..`` segments and symlinks are resolved, or
+    ``(None, reason)`` when it does not: an absolute path, a path that
+    escapes `base_dir`, or one the OS refuses to resolve at all (a name
+    too long, a NUL). `base_dir` must already be resolved. Existence and
+    extension are the caller's to judge. Shared by inline_images and the
+    SVG image splice (render._splice_svg_images), so the two cannot drift
+    on what "a local file of this content" means."""
+    try:
+        src_path = Path(url)
+        if src_path.is_absolute():
+            return None, "absolute path"
+        img_path = (base_dir / src_path).resolve()
+    except (OSError, ValueError) as e:
+        return None, f"cannot be resolved: {e.__class__.__name__}"
+    if not img_path.is_relative_to(base_dir):
+        return None, "escapes the content file's directory"
+    return img_path, None
+
+
+def is_local_file(path: Path) -> bool:
+    """`path.is_file()`, False instead of an exception when the OS
+    refuses the lookup (a name too long, a NUL)."""
+    try:
+        return path.is_file()
+    except (OSError, ValueError):
+        return False
+
+
 def inline_images(html: str, base_dir: Path) -> Tuple[str, List[str]]:
     """Rewrite local image paths to data URIs on every image-displaying
     attribute: <img src>, <img srcset>, <source src>, <source srcset>
@@ -225,13 +257,9 @@ def inline_images(html: str, base_dir: Path) -> Tuple[str, List[str]]:
             warnings.append(f"external image not inlined: {url}")
             return None
 
-        src_path = Path(url)
-        if src_path.is_absolute():
-            rejected.append(f"{url} (absolute path)")
-            return None
-        img_path = (base_dir / src_path).resolve()
-        if not img_path.is_relative_to(base_dir):
-            rejected.append(f"{url} (escapes the content file's directory)")
+        img_path, reason = resolve_local_image(url, base_dir)
+        if img_path is None:
+            rejected.append(f"{url} ({reason})")
             return None
         if img_path.suffix.lower() not in _MIME_BY_EXT:
             rejected.append(
@@ -239,7 +267,7 @@ def inline_images(html: str, base_dir: Path) -> Tuple[str, List[str]]:
                 f"image type: {', '.join(sorted(_MIME_BY_EXT))})"
             )
             return None
-        if not img_path.is_file():
+        if not is_local_file(img_path):
             missing.append(url)
             return None
 

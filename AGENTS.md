@@ -114,10 +114,11 @@ local headless Chromium-family browser because charts are Chart.js —
 JavaScript a PDF library cannot execute.
 
 Diagrams ride this loop: markdown slots are sanitized, so inline SVG
-can't come in through content. Leave `[[DIAGRAM:NAME]]` placeholder
-paragraphs in the content, splice theme-token-colored SVG `<figure>`s
-into the rendered HTML, and re-`check`. Patterns and copy-paste snippets:
-`docs/diagrams.md`.
+can't come in through content. Reference a local SVG file as a markdown
+image (`![alt](flow.svg)`) or leave `[[DIAGRAM:NAME]]` placeholder
+paragraphs and pass `jimemo render --figure NAME=file.svg`; either way the
+file is rebuilt by the SVG sanitizer and inlined, so theme tokens reach it.
+Patterns and copy-paste snippets: `docs/diagrams.md`.
 
 ## Design systems are bring-your-own
 
