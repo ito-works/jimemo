@@ -40,6 +40,8 @@ function cleanup() {
 // Every way out -- an error in any step included -- kills the browser
 // and removes its throwaway profile.
 process.on("exit", cleanup);
+// A signal does not emit "exit" by itself; exiting from its handler does.
+for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"]) process.on(sig, () => process.exit(130));
 process.on("uncaughtException", e => { console.error(String(e)); process.exit(1); });
 process.on("unhandledRejection", e => { console.error(String(e)); process.exit(1); });
 const deadline = setTimeout(() => { console.error("timeout"); cleanup(); process.exit(1); }, 60000);
