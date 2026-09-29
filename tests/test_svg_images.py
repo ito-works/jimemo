@@ -346,6 +346,14 @@ def test_malformed_url_is_refused_cleanly_not_a_traceback(tmp_path):
         _template_render(tmp_path, '<img src="http&colon;//[.svg">')
 
 
+@pytest.mark.parametrize("src", ["http://[.svg", "http://[.png"])
+def test_unparseable_url_is_a_content_error(tmp_path, src):
+    # urlsplit raises on an unmatched "[" after "//"; the splice leaves the
+    # tag alone and inline_images names it instead of a traceback.
+    with pytest.raises(ContentError, match=r"not a valid URL"):
+        _render(tmp_path, f"![d]({src})\n")
+
+
 def test_blank_alt_is_decorative(tmp_path):
     html = _render(tmp_path, "![ ](d.svg)\n", {"d.svg": GOOD_SVG})
     assert _span(html).startswith('<span aria-hidden="true" style=')
