@@ -21,7 +21,11 @@ from jimemo.charts import (
     _INIT_JS_MIDDLE,
     _INIT_JS_PREFIX,
     _INIT_JS_SUFFIX,
+    _FALLBACK_CLOSE_JS,
+    _FALLBACK_OPEN_JS,
+    _THEME_RUNTIME_HEAD_JS,
     _THEME_RUNTIME_JS,
+    _THEME_RUNTIME_TAIL_JS,
     DEFAULT_PALETTE,
     build_chart_config,
     chart_init_js,
@@ -274,8 +278,13 @@ def test_chart_tokens_agree_between_media_query_and_data_theme_blocks():
 def test_init_js_wraps_config_in_the_theme_runtime():
     config_json = serialize_chart_config({"type": "bar"})
     body = chart_init_js("sales", config_json)
+    # The theme runtime split at its `new Chart` statement, with the
+    # script-free fallback toggle around it (jimemo#s3e6).
+    assert _THEME_RUNTIME_JS == _THEME_RUNTIME_HEAD_JS + _THEME_RUNTIME_TAIL_JS
+    assert _THEME_RUNTIME_HEAD_JS.endswith("ch=new Chart(el,cfg);")
     assert body == (
-        "(function(el,cfg){" + _THEME_RUNTIME_JS + "})"
+        "(function(el,cfg){" + _FALLBACK_OPEN_JS + _THEME_RUNTIME_HEAD_JS
+        + _FALLBACK_CLOSE_JS + _THEME_RUNTIME_TAIL_JS + "})"
         '(document.getElementById("sales"), ' + config_json + ");"
     )
     assert body.startswith(_INIT_JS_PREFIX)
@@ -287,7 +296,7 @@ def test_theme_runtime_carries_the_baked_palette_and_no_lt():
     assert "<" not in _INIT_JS_PREFIX + _INIT_JS_MIDDLE + _INIT_JS_SUFFIX
     # Nothing that could fetch: the runtime only reads styles and redraws.
     for word in ("fetch", "XMLHttpRequest", "import(", "src", "href", "url("):
-        assert word not in _THEME_RUNTIME_JS
+        assert word not in _INIT_JS_PREFIX
 
 
 def test_pre_7n1f_init_shape_still_recognized():

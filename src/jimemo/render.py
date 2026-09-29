@@ -107,6 +107,16 @@ def _charts_context(
             "init_js": Markup(
                 chart_init_js(decl["id"], serialize_chart_config(config))
             ),
+            # The script-free fallback's table (jimemo#s3e6): the same
+            # validated labels, series names and values the config
+            # carries, for ui.chart(..., data=c.data) to render as HTML.
+            "data": {
+                "labels": config["data"]["labels"],
+                "series": [
+                    {"name": d["label"], "values": d["data"]}
+                    for d in config["data"]["datasets"]
+                ],
+            },
         })
     return charts
 

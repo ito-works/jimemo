@@ -308,6 +308,33 @@ vendored under `charts/vendor/chartjs/` and inlined into the page
 stays exactly what every other jimemo page is: one self-contained
 file you can open directly in a browser.
 
+#### Reading without scripts
+
+A chart is drawn by JavaScript, so a reader that turns scripts off —
+a browser setting, a sandboxed frame, or a `script-src 'none'` content
+security policy — would otherwise show an empty box. Since jimemo 0.0.4
+each chart is written static-first: the page as saved carries every
+label, series name and value in an open "Chart data" table under the
+chart's title, with the empty canvas hidden. When scripts do run, the
+chart's init script draws the chart and folds the table into a
+one-line "Chart data" disclosure the reader can open. Units belong in
+the series name or the chart title (`MRR ($k)`); the table shows them
+as written.
+
+- **Detecting it:** a page with the fallback has one
+  `<details class="jm-chart-data">` per chart. `jimemo --version`
+  reports 0.0.4 or later.
+- **Templates:** `chart-dashboard` passes its data. A personal template
+  gets the fallback by calling `ui.chart(c.id, c.init_js, data=c.data,
+  title=c.title)`; the two-argument call still renders the bare canvas.
+- **Older pages are not upgraded.** A page rendered before 0.0.4 is
+  still valid (`jimemo check`, `publish` and `pdf` accept it) but its
+  charts exist only as canvas drawings: with scripts off it shows empty
+  chart areas. Nothing converts existing files. To get a readable copy,
+  re-render it from its content file with the current jimemo, or make a
+  static copy with `jimemo pdf page.html`, which draws the charts in a
+  local browser and needs no scripts to read.
+
 Scaffold a new personal template under `~/.jimemo/templates/` (discovered
 alongside the repo's own):
 

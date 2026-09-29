@@ -71,7 +71,13 @@ contract in detail.
     script per chart, including a fixed runtime that maps the baked
     palette onto the page's `--jm-chart-N` tokens so charts follow
     light/dark; `parse_chart_init_js` is the matching recognizer lint
-    uses.
+    uses. The runtime also drives the script-free fallback
+    (jimemo#s3e6): its first statement clears the canvas's `hidden`,
+    and the statement right after `new Chart` collapses the
+    `<details class="jm-chart-data">` table that follows the canvas.
+    Three init shapes are recognized — the current one, the
+    jimemo#7n1f theme runtime without the toggle (0.0.3), and the bare
+    pre-7n1f `new Chart(...)` — so older pages keep passing `check`.
   - `suggest.py` — `score_templates`: deterministic, LLM-free template
     suitability scoring from content signals; backs `suggest` and
     `render auto`.
@@ -104,8 +110,9 @@ contract in detail.
   print), `components/<name>.css` (one file per toolkit component,
   including `chart-block.css` for the chart-dashboard layout),
   `macros.html.j2` (the matching Jinja2 macro for each component,
-  including the `chart(id, init_js)` macro — the only macro that
-  emits a `<script>`), `page.html.j2` (the base template every
+  including the `chart(id, init_js, data=, title=)` macro — the only
+  macro that emits a `<script>`; with `data` it also emits the
+  static-first data table), `page.html.j2` (the base template every
   seed/personal template extends).
 - `templates/<name>/` — a template is a folder: `template.html.j2`,
   `manifest.json`, `sample/` (real-feeling sample content the golden

@@ -296,9 +296,17 @@ the manifest must declare the chart so the renderer injects Chart.js).
 ```jinja
 <section class="jm-chart-block">
   <h2 class="jm-chart-block__title">{{ c.title }}</h2>
-  {{ ui.chart(c.id, c.init_js) }}
+  {{ ui.chart(c.id, c.init_js, data=c.data, title=c.title) }}
 </section>
 ```
+
+With `data` (the renderer's `c.data`, `{labels, series}`) the macro is
+static-first: the canvas starts `hidden` and an open
+`<details class="jm-chart-data">` table of every label and value follows
+it, so the chart's information survives a reader with scripts disabled
+or blocked; the init script unhides the canvas and collapses the table
+once the chart is drawn. `ui.chart(c.id, c.init_js)` without `data`
+still renders only the canvas and script.
 
 ## Page skeleton
 

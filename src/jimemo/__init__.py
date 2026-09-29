@@ -1,4 +1,4 @@
-__version__ = "0.0.3"
+__version__ = "0.0.4"
 
 # The oldest CPython jimemo supports, as (major, minor, micro). It is a
 # THREE-component floor on purpose: what jimemo needs landed in patch

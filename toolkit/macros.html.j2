@@ -181,8 +181,47 @@
     unexpected inline script — fail closed, never an injection. chart_id
     is the manifest-validated chart id (\A[a-zA-Z][\w-]*\Z), safe as a
     DOM id. No other content data may enter this macro. -#}
-{% macro chart(chart_id, init_js) -%}
+{#- chart: the canvas and its init script. With data ({labels, series:
+    [{name, values}]}, the renderer's c.data) it is static-first
+    (jimemo#s3e6): the canvas starts hidden and an open "Chart data"
+    table follows it, so a reader with scripts disabled or blocked sees
+    every label and value; the init script unhides the canvas and
+    collapses the table once the chart is drawn. Without data the
+    markup is the bare canvas + script. -#}
+{% macro chart(chart_id, init_js, data=none, title=none) -%}
+{%- if data %}
+{%- set name = title or chart_id -%}
+<canvas id="{{ chart_id }}" hidden role="img" aria-label="{{ name }}"></canvas>
+<details class="jm-chart-data" open>
+  <summary class="jm-chart-data__summary">Chart data</summary>
+  <div class="jm-data-table__scroll">
+  <table class="jm-data-table">
+    <caption class="jm-data-table__caption">{{ name }}</caption>
+    <thead>
+      <tr>
+        <td></td>
+        {%- for s in data.series %}
+        <th scope="col" class="jm-data-table__cell--num">{{ s.name }}</th>
+        {%- endfor %}
+      </tr>
+    </thead>
+    <tbody>
+      {%- for label in data.labels %}
+      {%- set i = loop.index0 %}
+      <tr>
+        <th scope="row">{{ label }}</th>
+        {%- for s in data.series %}
+        <td class="jm-data-table__cell--num">{{ s["values"][i] }}</td>
+        {%- endfor %}
+      </tr>
+      {%- endfor %}
+    </tbody>
+  </table>
+  </div>
+</details>
+{%- else -%}
 <canvas id="{{ chart_id }}"></canvas>
+{%- endif %}
 <script>{{ init_js }}</script>
 {%- endmacro %}
 
