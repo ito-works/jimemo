@@ -146,7 +146,7 @@ The flow, end to end:
 `jimemo render` replaces that image with the SVG itself, rebuilt through
 the sanitizer described above, inline in the page:
 
-```html
+```text
 <span role="img" aria-label="Orders move …" style="display:block;contain:paint"><svg …>…</svg></span>
 ```
 

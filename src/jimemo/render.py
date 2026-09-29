@@ -424,9 +424,19 @@ def _svg_image_src(attrs: List[Tuple[str, Optional[str]]]) -> Optional[str]:
     if len(set(names)) != len(names) or not set(names) <= _SVG_IMAGE_ATTRS:
         return None
     src = dict(attrs).get("src") or ""
-    if not src or src.startswith("#") or src.startswith("data:") or _is_remote(src):
-        return None
+    # The extension first: it is the cheap test, and it keeps every raster
+    # <img> away from the URL parsing below, which can raise on a value
+    # inline_images reads differently (it sees the raw attribute text).
     if not src.lower().endswith(".svg"):
+        return None
+    if src.startswith("#") or src.lower().startswith("data:"):
+        return None
+    try:
+        if _is_remote(src):
+            return None
+    except ValueError:
+        # urlsplit refuses it (an unmatched "[" after "//"): not a path
+        # this step will read. inline_images and lint judge it.
         return None
     return src
 
@@ -522,12 +532,12 @@ def _splice_svg_images(
 def _svg_image_wrapper(attrs: Dict[str, Optional[str]], svg: str) -> str:
     """The <span> that replaces an admitted <img>: role="img" +
     aria-label from a non-empty alt, aria-hidden="true" for an empty or
-    missing one (decorative), the title when present, and
+    missing or blank one (decorative), the title when present, and
     SVG_IMAGE_STYLE. Values are the parsed attribute values, escaped
     once."""
     alt = attrs.get("alt") or ""
     parts = ["<span"]
-    if alt:
+    if alt.strip():
         parts.append(f' role="img" aria-label="{escape(alt, quote=True)}"')
     else:
         parts.append(' aria-hidden="true"')
