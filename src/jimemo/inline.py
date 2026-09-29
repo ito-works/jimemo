@@ -253,7 +253,14 @@ def inline_images(html: str, base_dir: Path) -> Tuple[str, List[str]]:
             if not is_allowed_image_data_uri(url):
                 rejected.append(f"{url} (not an allowed image data URI)")
             return None
-        if _is_remote(url):
+        try:
+            remote = _is_remote(url)
+        except ValueError:
+            # urlsplit refuses it (an unmatched "[" after "//"); a browser
+            # could not load it either. Named, not a traceback.
+            rejected.append(f"{url} (not a valid URL)")
+            return None
+        if remote:
             warnings.append(f"external image not inlined: {url}")
             return None
 
