@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 120" role="img" aria-label="Process flow: draft, review, publish">
+  <rect x="10" y="30" width="160" height="60" rx="8" fill="none" stroke="currentColor" stroke-width="2"/>
+  <text x="90" y="66" text-anchor="middle" font-size="20" fill="currentColor">下書き Draft</text>
+  <line x1="170" y1="60" x2="240" y2="60" stroke="currentColor" stroke-width="2"/>
+  <rect x="240" y="30" width="160" height="60" rx="8" fill="none" stroke="currentColor" stroke-width="2"/>
+  <text x="320" y="66" text-anchor="middle" font-size="20" fill="currentColor">確認 Review</text>
+  <line x1="400" y1="60" x2="470" y2="60" stroke="currentColor" stroke-width="2"/>
+  <rect x="470" y="30" width="160" height="60" rx="8" fill="none" stroke="currentColor" stroke-width="2"/>
+  <text x="550" y="66" text-anchor="middle" font-size="20" fill="currentColor">公開 Publish</text>
+</svg>
