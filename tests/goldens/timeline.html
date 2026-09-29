@@ -474,15 +474,12 @@ body {
   padding-inline-end: 0;
 }
 
-/* Phone width (jimemo#s3e6): a markdown table wider than the screen
- * scrolls inside its own box. Without this it widened the whole page,
- * and a phone browser zoomed the page out until every line of prose was
- * too small to read. Desktop layout is unchanged. */
-@media (max-width: 40rem) {
-  .jm-prose table {
-    display: block;
-    overflow-x: auto;
-  }
+/* A markdown table sits in its own scroll box (content.py wraps each
+ * one), so a table wider than the screen scrolls there instead of
+ * widening the page -- on a phone that made the browser zoom out until
+ * every line of prose was too small to read (jimemo#s3e6). */
+.jm-prose__table-scroll {
+  overflow-x: auto;
 }
 
 /* Section break: a short rule, not a full-width divider. */

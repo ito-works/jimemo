@@ -5,6 +5,11 @@
 //
 // mode: "on" (scripts run), "off" (script execution disabled),
 // "zoom" (scripts run, text zoomed to 200% via the page's root font size).
+//   An approximation, and a harsh one: it also doubles rem-based spacing.
+//   Measured 2026-09-30 in headless Chrome: Emulation.setEmulatedOSTextScale
+//   changed nothing on these pages and text-size-adjust did not scale text.
+// shots.sh's "csp" shot is mode "on" against a copy of the page that
+// carries a script-src 'none' CSP meta tag.
 // Prints one JSON line: {file, mode, width, scrollWidth, requests: [...]}.
 // No dependencies beyond Node >= 22 (global WebSocket) and a local
 // Chromium-family browser; nothing is fetched.
@@ -32,6 +37,11 @@ function cleanup() {
   try { proc.kill("SIGKILL"); } catch {}
   try { rmSync(profile, { recursive: true, force: true }); } catch {}
 }
+// Every way out -- an error in any step included -- kills the browser
+// and removes its throwaway profile.
+process.on("exit", cleanup);
+process.on("uncaughtException", e => { console.error(String(e)); process.exit(1); });
+process.on("unhandledRejection", e => { console.error(String(e)); process.exit(1); });
 const deadline = setTimeout(() => { console.error("timeout"); cleanup(); process.exit(1); }, 60000);
 
 let port;
@@ -40,6 +50,7 @@ for (let i = 0; i < 200 && !port; i++) {
   if (existsSync(f)) port = readFileSync(f, "utf8").split("\n")[0];
   else await sleep(50);
 }
+if (!port) throw new Error("browser did not open a DevTools port");
 const targets = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
 const ws = new WebSocket(targets.find(t => t.type === "page").webSocketDebuggerUrl);
 await new Promise(r => ws.addEventListener("open", r, { once: true }));
@@ -81,7 +92,13 @@ const metrics = await send("Runtime.evaluate", {
   returnByValue: true,
 });
 const [inner, scrollWidth] = JSON.parse(metrics.result.value);
-const shot = await send("Page.captureScreenshot", { format: "png", captureBeyondViewport: true });
+// Full page: clip to the whole content box, not just the 844px viewport.
+const layout = await send("Page.getLayoutMetrics");
+const size = layout.cssContentSize;
+const shot = await send("Page.captureScreenshot", {
+  format: "png", captureBeyondViewport: true,
+  clip: { x: 0, y: 0, width: size.width, height: size.height, scale: 1 },
+});
 writeFileSync(out, Buffer.from(shot.data, "base64"));
 console.log(JSON.stringify({ file, mode, width: inner, scrollWidth, requests }));
 clearTimeout(deadline);

@@ -474,15 +474,12 @@ body {
   padding-inline-end: 0;
 }
 
-/* Phone width (jimemo#s3e6): a markdown table wider than the screen
- * scrolls inside its own box. Without this it widened the whole page,
- * and a phone browser zoomed the page out until every line of prose was
- * too small to read. Desktop layout is unchanged. */
-@media (max-width: 40rem) {
-  .jm-prose table {
-    display: block;
-    overflow-x: auto;
-  }
+/* A markdown table sits in its own scroll box (content.py wraps each
+ * one), so a table wider than the screen scrolls there instead of
+ * widening the page -- on a phone that made the browser zoom out until
+ * every line of prose was too small to read (jimemo#s3e6). */
+.jm-prose__table-scroll {
+  overflow-x: auto;
 }
 
 /* Section break: a short rule, not a full-width divider. */
@@ -819,7 +816,7 @@ below, updated as new plants are added to the collection.</p></div>
       <div class="jm-card-grid__text"><p>Crimson trusses light up the ridge line each spring; Bhutan's national flower.</p></div>
       
       
-      <div class="jm-prose"><table>
+      <div class="jm-prose"><div class="jm-prose__table-scroll"><table>
 <thead>
 <tr>
 <th>Attribute</th>
@@ -836,7 +833,7 @@ below, updated as new plants are added to the collection.</p></div>
 <td>8-12 m (tree form)</td>
 </tr>
 </tbody>
-</table></div>
+</table></div></div>
       
     </div>
   </article>
@@ -850,7 +847,7 @@ below, updated as new plants are added to the collection.</p></div>
       <div class="jm-card-grid__text"><p>The tea plant itself — leaves picked two-and-a-bud, the way the tea room begins.</p></div>
       
       
-      <div class="jm-prose"><table>
+      <div class="jm-prose"><div class="jm-prose__table-scroll"><table>
 <thead>
 <tr>
 <th>Attribute</th>
@@ -867,7 +864,7 @@ below, updated as new plants are added to the collection.</p></div>
 <td>1-1.5 m (hedge-pruned)</td>
 </tr>
 </tbody>
-</table></div>
+</table></div></div>
       
     </div>
   </article>
@@ -881,7 +878,7 @@ below, updated as new plants are added to the collection.</p></div>
       <div class="jm-card-grid__text"><p>A blue no dye has ever matched, four petals held level to the sky.</p></div>
       
       
-      <div class="jm-prose"><table>
+      <div class="jm-prose"><div class="jm-prose__table-scroll"><table>
 <thead>
 <tr>
 <th>Attribute</th>
@@ -898,7 +895,7 @@ below, updated as new plants are added to the collection.</p></div>
 <td>60-90 cm</td>
 </tr>
 </tbody>
-</table></div>
+</table></div></div>
       
     </div>
   </article>
@@ -912,7 +909,7 @@ below, updated as new plants are added to the collection.</p></div>
       <div class="jm-card-grid__text"><p>Blooms before a single leaf shows, bare branches carrying pink saucers.</p></div>
       
       
-      <div class="jm-prose"><table>
+      <div class="jm-prose"><div class="jm-prose__table-scroll"><table>
 <thead>
 <tr>
 <th>Attribute</th>
@@ -929,7 +926,7 @@ below, updated as new plants are added to the collection.</p></div>
 <td>15-20 m</td>
 </tr>
 </tbody>
-</table></div>
+</table></div></div>
       
     </div>
   </article>
@@ -953,7 +950,7 @@ below, updated as new plants are added to the collection.</p></div>
       <h3 class="jm-card-grid__title">Iris kemaonensis</h3>
       
       
-      <div class="jm-prose"><table>
+      <div class="jm-prose"><div class="jm-prose__table-scroll"><table>
 <thead>
 <tr>
 <th>Attribute</th>
@@ -970,7 +967,7 @@ below, updated as new plants are added to the collection.</p></div>
 <td>8-10 cm</td>
 </tr>
 </tbody>
-</table></div>
+</table></div></div>
       
     </div>
   </article>
