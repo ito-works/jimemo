@@ -74,10 +74,10 @@ def test_shot_scripts_parse():
 def test_shots_refuses_an_output_dir_inside_the_repo(tmp_path):
     # Refused before any browser is looked for, so this needs none. A
     # fresh subdirectory: the refusal must not depend on it existing.
-    target = FIXTURES / "never-created-by-this-test"
+    target = FIXTURES / "never-created-by-this-test" / "nested"
     proc = subprocess.run(["bash", str(FIXTURES / "shots.sh"), str(target)],
                           capture_output=True, text=True,
                           env={**os.environ, "CHROME": str(tmp_path / "none")})
     assert proc.returncode == 2, proc.stderr
     assert "inside the repo" in proc.stderr
-    assert not target.exists()
+    assert not target.parent.exists()

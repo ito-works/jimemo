@@ -19,15 +19,16 @@ set -euo pipefail
 out=${1:?usage: shots.sh OUT_DIR}
 here=$(cd "$(dirname "$0")" && pwd)
 repo=$(cd "$here/../../.." && pwd)
-created=0
-[ -d "$out" ] || { mkdir -p "$out"; created=1; }
-out=$(cd "$out" && pwd -P)
-case "$out/" in
+# Resolve the path before creating anything, so a refused OUT_DIR
+# leaves no directory behind at any depth.
+resolved=$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$out")
+case "$resolved/" in
   "$(cd "$repo" && pwd -P)/"*)
-    [ "$created" = 1 ] && rmdir "$out"
-    echo "OUT_DIR $out is inside the repo; pick a directory outside it" >&2
+    echo "OUT_DIR $resolved is inside the repo; pick a directory outside it" >&2
     exit 2 ;;
 esac
+mkdir -p "$resolved"
+out=$resolved
 chrome=${CHROME:-"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"}
 [ -x "$chrome" ] || { echo "no browser at $chrome (set CHROME)" >&2; exit 1; }
 manifest="$out/manifest.txt"

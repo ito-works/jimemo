@@ -278,6 +278,21 @@ body {
  * every line of prose was too small to read (jimemo#s3e6). */
 .jm-prose__table-scroll {
   overflow-x: auto;
+  /* The table's block margin moves here: margins inside a scroll box no
+   * longer collapse with the paragraphs around it, so leaving it on the
+   * table would widen the gaps on every screen. */
+  margin-block: var(--jm-space-5);
+}
+
+.jm-prose__table-scroll > table {
+  margin-block: 0;
+}
+
+/* Paper cannot scroll: print the table whole, as data-table.css does. */
+@media print {
+  .jm-prose__table-scroll {
+    overflow-x: visible;
+  }
 }
 
 /* Section break: a short rule, not a full-width divider. */
