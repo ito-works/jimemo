@@ -31,7 +31,7 @@
 {% for c in charts %}
 <section class="jm-chart-block">
   <h2 class="jm-chart-block__title">{{ c.title|default(c.id) }}</h2>
-  {{ ui.chart(c.id, c.init_js) }}
+  {{ ui.chart(c.id, c.init_js, data=c.data, title=c.title) }}
 </section>
 {% endfor %}
 

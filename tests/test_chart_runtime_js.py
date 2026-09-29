@@ -128,7 +128,8 @@ def pie_config():
 def test_first_draw_uses_the_dark_tokens():
     out = run(bar_config(), DARK_TOKENS)
     assert out["charts"] == 1
-    assert out["el"] == {"id": "c1"}
+    # The runtime's first statement unhides the canvas (jimemo#s3e6).
+    assert out["el"] == {"id": "c1", "hidden": False}
     assert out["first"] == [
         {"bg": DARK[0], "border": DARK[0]},
         {"bg": DARK[1], "border": DARK[1]},

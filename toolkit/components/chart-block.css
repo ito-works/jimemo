@@ -22,3 +22,35 @@
 .jm-chart-block canvas {
   max-width: 100%;
 }
+
+/* The script-free fallback (jimemo#s3e6): an open "Chart data" table
+ * that the chart's init script collapses to its summary line once the
+ * canvas is drawn. With scripts disabled or blocked it stays open and
+ * the canvas stays hidden, so the table is what the reader sees. */
+.jm-chart-data {
+  margin-block-start: var(--jm-space-3);
+}
+
+.jm-chart-data__summary {
+  font-family: var(--jm-font-ui);
+  font-size: var(--jm-text-sm);
+  color: var(--jm-muted);
+  cursor: pointer;
+}
+
+.jm-chart-data .jm-data-table__scroll {
+  margin-block: var(--jm-space-3) 0;
+}
+
+/* Row headers are the chart's labels: body text, not column apparatus. */
+.jm-chart-data tbody th {
+  font-size: inherit;
+  font-weight: 600;
+  text-transform: none;
+  letter-spacing: normal;
+  color: var(--jm-text);
+  padding: var(--jm-space-3);
+  border-block-end: 1px solid var(--jm-border);
+  vertical-align: top;
+  white-space: normal;
+}

@@ -284,7 +284,7 @@ def build_chart_config(
 #     tokens), and on afterprint goes back to the tokens.
 # It contains no "<" (checked at import below), so it cannot close the
 # script element it sits in.
-_THEME_RUNTIME_JS = (
+_THEME_RUNTIME_HEAD_JS = (
     "var P=" + json.dumps(list(DEFAULT_PALETTE), separators=(",", ":")) + ","
     "R=document.documentElement,"
     "O=cfg.data.datasets.map(function(d){return[d.backgroundColor,d.borderColor]}),"
@@ -304,6 +304,8 @@ _THEME_RUNTIME_JS = (
     "var q=cfg.options=cfg.options||{},t=q.transitions=q.transitions||{};"
     "t.jimemo={animation:{duration:0}};"
     "ch=new Chart(el,cfg);"
+)
+_THEME_RUNTIME_TAIL_JS = (
     "matchMedia(\"(prefers-color-scheme: dark)\")"
     ".addEventListener(\"change\",function(){u(!1)});"
     "new MutationObserver(function(){u(!1)})"
@@ -311,8 +313,28 @@ _THEME_RUNTIME_JS = (
     "addEventListener(\"beforeprint\",function(){u(!0)});"
     "addEventListener(\"afterprint\",function(){u(!1)})"
 )
+_THEME_RUNTIME_JS = _THEME_RUNTIME_HEAD_JS + _THEME_RUNTIME_TAIL_JS
+# The script-free fallback toggle (jimemo#s3e6). A chart rendered with
+# its data table is static-first: the canvas carries `hidden` and the
+# `<details class="jm-chart-data">` right after it is `open`, so a
+# reader that disables or CSP-blocks scripts shows the table and no
+# empty canvas box. The runtime's first statement unhides the canvas
+# (before Chart.js measures it); the statement right after `new Chart`
+# -- before any theme listener is registered, so a failure there cannot
+# strand an open duplicate under a drawn chart -- collapses that details
+# to its one-line summary. If the construction throws, the table stays
+# open. A canvas with no table
+# (a template calling ui.chart without data) has no `hidden` to clear
+# and no such sibling, so both statements are no-ops there.
+_FALLBACK_OPEN_JS = "el.hidden=!1;"
+_FALLBACK_CLOSE_JS = (
+    "var f=el.nextElementSibling;"
+    "if(f&&f.classList.contains(\"jm-chart-data\"))f.open=!1;"
+)
 _INIT_JS_PREFIX = (
-    "(function(el,cfg){" + _THEME_RUNTIME_JS + "})(document.getElementById(\""
+    "(function(el,cfg){" + _FALLBACK_OPEN_JS + _THEME_RUNTIME_HEAD_JS
+    + _FALLBACK_CLOSE_JS + _THEME_RUNTIME_TAIL_JS
+    + "})(document.getElementById(\""
 )
 _INIT_JS_MIDDLE = '"), '
 _INIT_JS_SUFFIX = ');'
@@ -336,6 +358,16 @@ def _init_js_re(prefix: str) -> "re.Pattern[str]":
 
 
 _INIT_JS_RE = _init_js_re(_INIT_JS_PREFIX)
+
+# The jimemo#7n1f shape: the theme runtime without the fallback toggle,
+# emitted by jimemo 0.0.3 and earlier since 7n1f. Recognized, never
+# emitted, so pages rendered before jimemo#s3e6 keep passing
+# `jimemo check` / publish / pdf. Built from the same literal as the
+# current shape, so the two cannot drift apart.
+_THEME_INIT_JS_PREFIX = (
+    "(function(el,cfg){" + _THEME_RUNTIME_JS + "})(document.getElementById(\""
+)
+_THEME_INIT_JS_RE = _init_js_re(_THEME_INIT_JS_PREFIX)
 
 # The init shape before jimemo#7n1f: the bare construction, no theme
 # runtime. parse_chart_init_js still RECOGNIZES it so a page rendered by
@@ -376,12 +408,16 @@ def chart_init_js(chart_id: str, config_json: str) -> str:
 
 def parse_chart_init_js(script_body: str) -> Optional[Tuple[str, str]]:
     """``(chart_id, config_json)`` if ``script_body`` has exactly the
-    byte shape chart_init_js emits — or the pre-jimemo#7n1f shape
-    ``new Chart(document.getElementById("<id>"), <config_json>);``, kept
-    so older rendered pages still pass — else None. Recognition only —
+    byte shape chart_init_js emits — or one of the two older shapes kept
+    so older rendered pages still pass: the jimemo#7n1f theme runtime
+    without the jimemo#s3e6 fallback toggle, and the pre-7n1f
+    ``new Chart(document.getElementById("<id>"), <config_json>);`` —
+    else None. Recognition only —
     the caller (lint) still judges whether the id is declared and the
     config text is the safe-serialized form."""
     match = _INIT_JS_RE.fullmatch(script_body)
+    if match is None:
+        match = _THEME_INIT_JS_RE.fullmatch(script_body)
     if match is None:
         match = _LEGACY_INIT_JS_RE.fullmatch(script_body)
     if match is None:

@@ -658,6 +658,38 @@ body {
   max-width: 100%;
 }
 
+/* The script-free fallback (jimemo#s3e6): an open "Chart data" table
+ * that the chart's init script collapses to its summary line once the
+ * canvas is drawn. With scripts disabled or blocked it stays open and
+ * the canvas stays hidden, so the table is what the reader sees. */
+.jm-chart-data {
+  margin-block-start: var(--jm-space-3);
+}
+
+.jm-chart-data__summary {
+  font-family: var(--jm-font-ui);
+  font-size: var(--jm-text-sm);
+  color: var(--jm-muted);
+  cursor: pointer;
+}
+
+.jm-chart-data .jm-data-table__scroll {
+  margin-block: var(--jm-space-3) 0;
+}
+
+/* Row headers are the chart's labels: body text, not column apparatus. */
+.jm-chart-data tbody th {
+  font-size: inherit;
+  font-weight: 600;
+  text-transform: none;
+  letter-spacing: normal;
+  color: var(--jm-text);
+  padding: var(--jm-space-3);
+  border-block-end: 1px solid var(--jm-border);
+  vertical-align: top;
+  white-space: normal;
+}
+
 /* data-table — a booktable: heavy rule above, hairline rows, no boxes,
  * no zebra. Headers and cells speak in the apparatus voice; numeric
  * columns align right with tabular figures. Wrap in __scroll so wide
@@ -846,14 +878,100 @@ each channel's weekly values so the chart can be checked by hand.</p>
 
 <section class="jm-chart-block">
   <h2 class="jm-chart-block__title">Weekly signups by channel</h2>
-  <canvas id="signups-trend"></canvas>
-<script>(function(el,cfg){var P=["#2a78d6","#1baf7a","#eda100","#008300","#4a3aa7","#e34948","#e87ba4","#eb6834"],R=document.documentElement,O=cfg.data.datasets.map(function(d){return[d.backgroundColor,d.borderColor]}),ch;function a(D,p){var s=p?null:getComputedStyle(R);function k(c){var i=s?P.indexOf(c):-1,v=i==-1?"":s.getPropertyValue("--jm-chart-"+(i+1)).trim();return v||c}function m(v){return Array.isArray(v)?v.map(k):k(v)}D.forEach(function(d,i){d.backgroundColor=m(O[i][0]);if(O[i][1]!==void 0)d.borderColor=m(O[i][1])})}function u(p){a(ch.data.datasets,p);ch.update("jimemo")}a(cfg.data.datasets,!1);var q=cfg.options=cfg.options||{},t=q.transitions=q.transitions||{};t.jimemo={animation:{duration:0}};ch=new Chart(el,cfg);matchMedia("(prefers-color-scheme: dark)").addEventListener("change",function(){u(!1)});new MutationObserver(function(){u(!1)}).observe(R,{attributes:!0,attributeFilter:["data-theme"]});addEventListener("beforeprint",function(){u(!0)});addEventListener("afterprint",function(){u(!1)})})(document.getElementById("signups-trend"), {"type":"line","data":{"labels":["25 May","1 Jun","8 Jun","15 Jun","22 Jun","29 Jun"],"datasets":[{"label":"Organic","data":[120,128,135,140,152,168],"backgroundColor":"#2a78d6","borderColor":"#2a78d6"},{"label":"Paid search","data":[95,101,98,110,118,124],"backgroundColor":"#1baf7a","borderColor":"#1baf7a"},{"label":"Referral","data":[40,44,47,50,53,58],"backgroundColor":"#eda100","borderColor":"#eda100"}]},"options":{}});</script>
+  <canvas id="signups-trend" hidden role="img" aria-label="Weekly signups by channel"></canvas>
+<details class="jm-chart-data" open>
+  <summary class="jm-chart-data__summary">Chart data</summary>
+  <div class="jm-data-table__scroll">
+  <table class="jm-data-table">
+    <caption class="jm-data-table__caption">Weekly signups by channel</caption>
+    <thead>
+      <tr>
+        <td></td>
+        <th scope="col" class="jm-data-table__cell--num">Organic</th>
+        <th scope="col" class="jm-data-table__cell--num">Paid search</th>
+        <th scope="col" class="jm-data-table__cell--num">Referral</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <th scope="row">25 May</th>
+        <td class="jm-data-table__cell--num">120</td>
+        <td class="jm-data-table__cell--num">95</td>
+        <td class="jm-data-table__cell--num">40</td>
+      </tr>
+      <tr>
+        <th scope="row">1 Jun</th>
+        <td class="jm-data-table__cell--num">128</td>
+        <td class="jm-data-table__cell--num">101</td>
+        <td class="jm-data-table__cell--num">44</td>
+      </tr>
+      <tr>
+        <th scope="row">8 Jun</th>
+        <td class="jm-data-table__cell--num">135</td>
+        <td class="jm-data-table__cell--num">98</td>
+        <td class="jm-data-table__cell--num">47</td>
+      </tr>
+      <tr>
+        <th scope="row">15 Jun</th>
+        <td class="jm-data-table__cell--num">140</td>
+        <td class="jm-data-table__cell--num">110</td>
+        <td class="jm-data-table__cell--num">50</td>
+      </tr>
+      <tr>
+        <th scope="row">22 Jun</th>
+        <td class="jm-data-table__cell--num">152</td>
+        <td class="jm-data-table__cell--num">118</td>
+        <td class="jm-data-table__cell--num">53</td>
+      </tr>
+      <tr>
+        <th scope="row">29 Jun</th>
+        <td class="jm-data-table__cell--num">168</td>
+        <td class="jm-data-table__cell--num">124</td>
+        <td class="jm-data-table__cell--num">58</td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+</details>
+<script>(function(el,cfg){el.hidden=!1;var P=["#2a78d6","#1baf7a","#eda100","#008300","#4a3aa7","#e34948","#e87ba4","#eb6834"],R=document.documentElement,O=cfg.data.datasets.map(function(d){return[d.backgroundColor,d.borderColor]}),ch;function a(D,p){var s=p?null:getComputedStyle(R);function k(c){var i=s?P.indexOf(c):-1,v=i==-1?"":s.getPropertyValue("--jm-chart-"+(i+1)).trim();return v||c}function m(v){return Array.isArray(v)?v.map(k):k(v)}D.forEach(function(d,i){d.backgroundColor=m(O[i][0]);if(O[i][1]!==void 0)d.borderColor=m(O[i][1])})}function u(p){a(ch.data.datasets,p);ch.update("jimemo")}a(cfg.data.datasets,!1);var q=cfg.options=cfg.options||{},t=q.transitions=q.transitions||{};t.jimemo={animation:{duration:0}};ch=new Chart(el,cfg);var f=el.nextElementSibling;if(f&&f.classList.contains("jm-chart-data"))f.open=!1;matchMedia("(prefers-color-scheme: dark)").addEventListener("change",function(){u(!1)});new MutationObserver(function(){u(!1)}).observe(R,{attributes:!0,attributeFilter:["data-theme"]});addEventListener("beforeprint",function(){u(!0)});addEventListener("afterprint",function(){u(!1)})})(document.getElementById("signups-trend"), {"type":"line","data":{"labels":["25 May","1 Jun","8 Jun","15 Jun","22 Jun","29 Jun"],"datasets":[{"label":"Organic","data":[120,128,135,140,152,168],"backgroundColor":"#2a78d6","borderColor":"#2a78d6"},{"label":"Paid search","data":[95,101,98,110,118,124],"backgroundColor":"#1baf7a","borderColor":"#1baf7a"},{"label":"Referral","data":[40,44,47,50,53,58],"backgroundColor":"#eda100","borderColor":"#eda100"}]},"options":{}});</script>
 </section>
 
 <section class="jm-chart-block">
   <h2 class="jm-chart-block__title">Monthly recurring revenue by plan tier</h2>
-  <canvas id="revenue-by-tier"></canvas>
-<script>(function(el,cfg){var P=["#2a78d6","#1baf7a","#eda100","#008300","#4a3aa7","#e34948","#e87ba4","#eb6834"],R=document.documentElement,O=cfg.data.datasets.map(function(d){return[d.backgroundColor,d.borderColor]}),ch;function a(D,p){var s=p?null:getComputedStyle(R);function k(c){var i=s?P.indexOf(c):-1,v=i==-1?"":s.getPropertyValue("--jm-chart-"+(i+1)).trim();return v||c}function m(v){return Array.isArray(v)?v.map(k):k(v)}D.forEach(function(d,i){d.backgroundColor=m(O[i][0]);if(O[i][1]!==void 0)d.borderColor=m(O[i][1])})}function u(p){a(ch.data.datasets,p);ch.update("jimemo")}a(cfg.data.datasets,!1);var q=cfg.options=cfg.options||{},t=q.transitions=q.transitions||{};t.jimemo={animation:{duration:0}};ch=new Chart(el,cfg);matchMedia("(prefers-color-scheme: dark)").addEventListener("change",function(){u(!1)});new MutationObserver(function(){u(!1)}).observe(R,{attributes:!0,attributeFilter:["data-theme"]});addEventListener("beforeprint",function(){u(!0)});addEventListener("afterprint",function(){u(!1)})})(document.getElementById("revenue-by-tier"), {"type":"bar","data":{"labels":["Starter","Growth","Scale","Enterprise"],"datasets":[{"label":"MRR ($k)","data":[18,34,27,21],"backgroundColor":"#2a78d6","borderColor":"#2a78d6"}]},"options":{}});</script>
+  <canvas id="revenue-by-tier" hidden role="img" aria-label="Monthly recurring revenue by plan tier"></canvas>
+<details class="jm-chart-data" open>
+  <summary class="jm-chart-data__summary">Chart data</summary>
+  <div class="jm-data-table__scroll">
+  <table class="jm-data-table">
+    <caption class="jm-data-table__caption">Monthly recurring revenue by plan tier</caption>
+    <thead>
+      <tr>
+        <td></td>
+        <th scope="col" class="jm-data-table__cell--num">MRR ($k)</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <th scope="row">Starter</th>
+        <td class="jm-data-table__cell--num">18</td>
+      </tr>
+      <tr>
+        <th scope="row">Growth</th>
+        <td class="jm-data-table__cell--num">34</td>
+      </tr>
+      <tr>
+        <th scope="row">Scale</th>
+        <td class="jm-data-table__cell--num">27</td>
+      </tr>
+      <tr>
+        <th scope="row">Enterprise</th>
+        <td class="jm-data-table__cell--num">21</td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+</details>
+<script>(function(el,cfg){el.hidden=!1;var P=["#2a78d6","#1baf7a","#eda100","#008300","#4a3aa7","#e34948","#e87ba4","#eb6834"],R=document.documentElement,O=cfg.data.datasets.map(function(d){return[d.backgroundColor,d.borderColor]}),ch;function a(D,p){var s=p?null:getComputedStyle(R);function k(c){var i=s?P.indexOf(c):-1,v=i==-1?"":s.getPropertyValue("--jm-chart-"+(i+1)).trim();return v||c}function m(v){return Array.isArray(v)?v.map(k):k(v)}D.forEach(function(d,i){d.backgroundColor=m(O[i][0]);if(O[i][1]!==void 0)d.borderColor=m(O[i][1])})}function u(p){a(ch.data.datasets,p);ch.update("jimemo")}a(cfg.data.datasets,!1);var q=cfg.options=cfg.options||{},t=q.transitions=q.transitions||{};t.jimemo={animation:{duration:0}};ch=new Chart(el,cfg);var f=el.nextElementSibling;if(f&&f.classList.contains("jm-chart-data"))f.open=!1;matchMedia("(prefers-color-scheme: dark)").addEventListener("change",function(){u(!1)});new MutationObserver(function(){u(!1)}).observe(R,{attributes:!0,attributeFilter:["data-theme"]});addEventListener("beforeprint",function(){u(!0)});addEventListener("afterprint",function(){u(!1)})})(document.getElementById("revenue-by-tier"), {"type":"bar","data":{"labels":["Starter","Growth","Scale","Enterprise"],"datasets":[{"label":"MRR ($k)","data":[18,34,27,21],"backgroundColor":"#2a78d6","borderColor":"#2a78d6"}]},"options":{}});</script>
 </section>
 
 
