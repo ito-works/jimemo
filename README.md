@@ -327,6 +327,8 @@ as written.
 - **Templates:** `chart-dashboard` passes its data. A personal template
   gets the fallback by calling `ui.chart(c.id, c.init_js, data=c.data,
   title=c.title)`; the two-argument call still renders the bare canvas.
+  List `data-table` in the manifest's `components` too for the table's
+  full styling (chart-block alone keeps it scrollable but unstyled).
 - **Older pages are not upgraded.** A page rendered before 0.0.4 is
   still valid (`jimemo check`, `publish` and `pdf` accept it) but its
   charts exist only as canvas drawings: with scripts off it shows empty

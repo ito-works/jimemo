@@ -40,6 +40,9 @@
 
 .jm-chart-data .jm-data-table__scroll {
   margin-block: var(--jm-space-3) 0;
+  /* Repeated from data-table.css so a template that lists only
+   * chart-block still keeps a many-series table inside the screen. */
+  overflow-x: auto;
 }
 
 /* Row headers are the chart's labels: body text, not column apparatus. */

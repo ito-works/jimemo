@@ -189,7 +189,7 @@ DRIVER = r"""
 let input = "";
 process.stdin.on("data", d => { input += d; });
 process.stdin.on("end", () => {
-  const {body, sibling, chartThrows, mediaThrows} = JSON.parse(input);
+  const {body, sibling, chartThrows, mediaThrows, noChart} = JSON.parse(input);
   const details = {classList: {contains: c => c === "jm-chart-data"}, open: true};
   const other = {classList: {contains: () => false}, open: true};
   const canvas = {hidden: true, nextElementSibling:
@@ -202,7 +202,8 @@ process.stdin.on("end", () => {
   };
   global.MutationObserver = function () { this.observe = () => {}; };
   global.addEventListener = () => {};
-  global.Chart = function () { if (chartThrows) throw new Error("boom"); this.update = () => {}; };
+  global.Chart = noChart ? undefined
+    : function () { if (chartThrows) throw new Error("boom"); this.update = () => {}; };
   let threw = false;
   try { eval(body); } catch (e) { threw = true; }
   console.log(JSON.stringify({threw, hidden: canvas.hidden,
@@ -238,6 +239,9 @@ def test_drawn_chart_unhides_canvas_and_collapses_table():
 def test_failed_construction_leaves_the_table_open():
     r = _run(sibling="details", chartThrows=True)
     assert r["threw"] and r["detailsOpen"] is True
+    # Chart.js was present, so the canvas was already unhidden: a chart
+    # that throws in construction is a jimemo bug, not a reader setting.
+    assert r["hidden"] is False
 
 
 @node_only
@@ -250,3 +254,11 @@ def test_later_listener_failure_still_collapses_the_table():
 def test_other_or_no_sibling_is_left_alone():
     assert _run(sibling="other")["otherOpen"] is True
     assert _run(sibling=None)["threw"] is False
+
+
+@node_only
+def test_missing_chart_library_keeps_the_static_page():
+    # Chart.js never loaded (a browser that cannot run the bundle): the
+    # runtime stops before unhiding, so no empty canvas appears.
+    r = _run(sibling="details", noChart=True)
+    assert r == {"threw": False, "hidden": True, "detailsOpen": True, "otherOpen": True}
