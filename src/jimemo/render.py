@@ -14,6 +14,7 @@ duplicated, or missing. A chartless manifest injects neither name,
 leaving chartless no-script output byte-identical.
 """
 import sys
+from html import escape
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -27,7 +28,13 @@ from .charts import (
     serialize_chart_config,
 )
 from .errors import ContentError
-from .inline import assemble_css, inline_images
+from .inline import (
+    _is_remote,
+    assemble_css,
+    inline_images,
+    is_local_file,
+    resolve_local_image,
+)
 from .lint import lint_html
 from .manifest import load_manifest
 from .sanitize import SvgDrop, _svg_drop_label, sanitize_svg_with_report
@@ -150,7 +157,7 @@ class _IdCollector(HTMLParser):
     handle_startendtag = handle_starttag
 
 
-def _page_ids(html: str) -> set:
+def _page_ids(html: str, prefix: str = "--figure") -> set:
     collector = _IdCollector()
     try:
         # A browser's HTML tokenizer turns U+0000 into U+FFFD; html.parser
@@ -165,28 +172,85 @@ def _page_ids(html: str) -> set:
         # Fail closed: without the page's ids the collision check below
         # would silently not run.
         raise ContentError(
-            f"--figure: could not read the rendered page's ids: {e}"
+            f"{prefix}: could not read the rendered page's ids: {e}"
         ) from e
     return collector.ids
 
 
-def _figure_drop_warnings(name: str, drops: List[SvgDrop]) -> List[str]:
+def _figure_drop_warnings(
+    name: str, drops: List[SvgDrop], kind: str = "figure"
+) -> List[str]:
     """The stderr warning lines for one figure's sanitizer drops: one per
     distinct drop, at most FIGURE_DROP_WARNINGS_MAX, then one summary line
     if more remain. The figure NAME goes through the same display filter as
     the dropped names (sanitize._svg_drop_label): it is CLI input an agent
     writes, and it shares the line with them. No dropped VALUE appears —
-    the report does not carry one."""
+    the report does not carry one. `kind` is the line's first word:
+    ``figure`` for --figure, ``image`` for an SVG markdown image."""
     label = _svg_drop_label(name)
     lines = [
-        f"figure {label}: dropped {d.kind} {d.name} ({d.reason})"
+        f"{kind} {label}: dropped {d.kind} {d.name} ({d.reason})"
         for d in drops[:FIGURE_DROP_WARNINGS_MAX]
     ]
     hidden = len(drops) - FIGURE_DROP_WARNINGS_MAX
     if hidden > 0:
         noun = "drop" if hidden == 1 else "drops"
-        lines.append(f"figure {label}: {hidden} more distinct {noun} not shown")
+        lines.append(f"{kind} {label}: {hidden} more distinct {noun} not shown")
     return lines
+
+
+def _sanitize_svg_sources(
+    sources: Dict[Any, str],
+    page_ids: set,
+    names: Dict[Any, str],
+    subject: str,
+    kind: str,
+) -> Tuple[Dict[Any, str], List[str]]:
+    """Sanitize every raw SVG in `sources` (key -> untrusted SVG text) and
+    check its ids; returns ``(key -> sanitized markup, warning lines)``.
+    Shared by --figure (_splice_figures) and SVG markdown images
+    (_splice_svg_images), so both get one set of rules.
+
+    `names[key]` is the RAW name shown for a source (a figure NAME, an
+    image's src); every message shows it through _svg_drop_label, as
+    ``{subject} {label}`` (``--figure FLOW``, ``image d.svg``). `kind`
+    starts each drop-warning line (_figure_drop_warnings).
+
+    Raises ContentError, before the caller changes anything: when a source
+    is not acceptable SVG (sanitize_svg_with_report's ValueError, named);
+    when a source defines an id in `page_ids` — inline SVG shares the
+    page's one id namespace, so a gradient or a chart canvas id would
+    resolve to the wrong element; and when two DIFFERENT keys define the
+    same id. One key's repeated ids are its own and allowed."""
+    sanitized: Dict[Any, str] = {}
+    id_owner: Dict[str, Any] = {}
+    warnings: List[str] = []
+    for key, svg_text in sources.items():
+        label = _svg_drop_label(names[key])
+        try:
+            svg, ids, drops = sanitize_svg_with_report(svg_text)
+        except ValueError as e:
+            raise ContentError(f"{subject} {label}: {e}") from e
+        warnings.extend(_figure_drop_warnings(names[key], drops, kind))
+        for svg_id in ids:
+            if svg_id in page_ids:
+                raise ContentError(
+                    f"{subject} {label} defines id={svg_id!r}, which the page "
+                    "already uses (a heading anchor, a chart, or an SVG "
+                    "image); inline SVG shares the page's one id namespace — "
+                    f"give the {kind}'s ids a distinct prefix"
+                )
+            owner = id_owner.setdefault(svg_id, key)
+            if owner != key:
+                raise ContentError(
+                    f"{subject} {_svg_drop_label(names[owner])} and "
+                    f"{subject} {label} both define id={svg_id!r}; "
+                    "inline SVG shares the page's one id namespace, so "
+                    f"url(#{_svg_drop_label(svg_id)}) would resolve to the "
+                    f"wrong {kind} — give each {kind}'s ids a distinct prefix"
+                )
+        sanitized[key] = svg
+    return sanitized, warnings
 
 
 def _splice_figures(html: str, figures: Dict[str, str]) -> Tuple[str, List[str]]:
@@ -225,35 +289,13 @@ def _splice_figures(html: str, figures: Dict[str, str]) -> Tuple[str, List[str]]
     both land on a terminal. An id is ALSO printed with ``!r``, which is
     exact and escapes what a terminal would act on; the ``url(#…)`` form
     beside it is the label, because that one is read as the CSS it shows."""
-    sanitized: Dict[str, str] = {}
-    id_owner: Dict[str, str] = {}
-    warnings: List[str] = []
-    page_ids = _page_ids(html)
-    for name, svg_text in figures.items():
-        label = _svg_drop_label(name)
-        try:
-            svg, ids, drops = sanitize_svg_with_report(svg_text)
-        except ValueError as e:
-            raise ContentError(f"--figure {label}: {e}") from e
-        warnings.extend(_figure_drop_warnings(name, drops))
-        for svg_id in ids:
-            if svg_id in page_ids:
-                raise ContentError(
-                    f"--figure {label} defines id={svg_id!r}, which the page "
-                    "already uses (a heading anchor or a chart); inline SVG "
-                    "shares the page's one id namespace — give the figure's "
-                    "ids a distinct prefix"
-                )
-            owner = id_owner.setdefault(svg_id, name)
-            if owner != name:
-                raise ContentError(
-                    f"--figure {_svg_drop_label(owner)} and --figure {label} "
-                    f"both define id={svg_id!r}; "
-                    "inline SVG shares the page's one id namespace, so "
-                    f"url(#{_svg_drop_label(svg_id)}) would resolve to the "
-                    "wrong figure — give each figure's ids a distinct prefix"
-                )
-        sanitized[name] = svg
+    sanitized, warnings = _sanitize_svg_sources(
+        figures,
+        _page_ids(html),
+        {name: name for name in figures},
+        subject="--figure",
+        kind="figure",
+    )
 
     # Every placeholder is looked up in the page as rendered, before any
     # figure lands, so text inside one figure can never stand in for
@@ -287,6 +329,215 @@ def _splice_figures(html: str, figures: Dict[str, str]) -> Tuple[str, List[str]]
     return html, warnings
 
 
+# --- SVG markdown images (jimemo#fqfq) ---------------------------------------
+#
+# `![alt](diagram.svg)` renders as the SVG itself, rebuilt by the same
+# sanitizer --figure uses, inline — not as a data:image/svg+xml URI, which
+# lint refuses and through which page tokens (var(--jm-*)) could not reach
+# the drawing. docs/diagrams.md, "Route 2", is the user-facing statement.
+
+# The wrapper replacing the <img>. A <span>, not a <figure>: markdown puts an
+# image inside <p>, where a <figure> would make a browser close the
+# paragraph early. display:block sizes a width:100% SVG against the column;
+# contain:paint is FIGURE_OPEN's containment (a kept `style` may ask for
+# position:fixed). Inline, not toolkit CSS, so pages without SVG images are
+# byte-identical.
+SVG_IMAGE_STYLE = "display:block;contain:paint"
+
+# The only attributes an admitted <img> may carry: what sanitize_html emits
+# for a markdown image. Anything else is left for inline_images and lint to
+# refuse, rather than silently dropped by the replacement.
+_SVG_IMAGE_ATTRS = frozenset({"src", "alt", "title"})
+
+# While any of these is open, an <img> the parser reports is NOT one a
+# browser would build, or not one it would build as HTML: raw text and
+# RCDATA (whatever this Python's html.parser does with them — at the 3.13.6
+# floor it treats only script/style as raw text), noscript (raw text when
+# scripting is on), template (inert contents), and svg/math (foreign
+# content). Such a tag is left alone; the later steps refuse a .svg in it.
+_SVG_IMAGE_SKIP_CONTEXTS = frozenset({
+    "script", "style", "xmp", "iframe", "noembed", "noframes", "textarea",
+    "title", "noscript", "template", "svg", "math",
+})
+
+# Foreign elements: a browser honours their self-closing slash, so
+# <svg/> opens nothing. Every other skip-context name ignores the slash
+# in a browser (it opens the element and its text mode) and counts as open.
+_SVG_IMAGE_FOREIGN = frozenset({"svg", "math"})
+
+
+class _ImgTagFinder(HTMLParser):
+    """Every <img> start tag in a page, as ``(start, end, attrs)`` source
+    spans, outside the contexts in _SVG_IMAGE_SKIP_CONTEXTS. Comments and
+    declarations are not tags and never reported."""
+
+    def __init__(self, page: str) -> None:
+        super().__init__(convert_charrefs=True)
+        self._page = page
+        # getpos() is (line, column); html.parser counts lines by "\n"
+        # only, so a line's start is one past each "\n" in the page.
+        self._line_starts = [0]
+        index = page.find("\n")
+        while index != -1:
+            self._line_starts.append(index + 1)
+            index = page.find("\n", index + 1)
+        self._open = {}  # skip-context name -> open count
+        self._plaintext = False
+        # (start, end, attrs, raw tag text) per <img> outside skip contexts.
+        self.tags: List[Tuple[int, int, List[Tuple[str, Optional[str]]], str]] = []
+
+    def _skipping(self) -> bool:
+        return self._plaintext or any(self._open.values())
+
+    def _found(self, tag, attrs) -> None:
+        if tag == "img" and not self._skipping():
+            line, column = self.getpos()
+            start = self._line_starts[line - 1] + column
+            raw = self.get_starttag_text()
+            self.tags.append((start, start + len(raw), attrs, raw))
+
+    def handle_starttag(self, tag, attrs):
+        self._found(tag, attrs)
+        if tag == "plaintext":
+            self._plaintext = True
+        elif tag in _SVG_IMAGE_SKIP_CONTEXTS:
+            self._open[tag] = self._open.get(tag, 0) + 1
+
+    def handle_startendtag(self, tag, attrs):
+        self._found(tag, attrs)
+        if tag == "plaintext":
+            self._plaintext = True
+        elif tag in _SVG_IMAGE_SKIP_CONTEXTS and tag not in _SVG_IMAGE_FOREIGN:
+            self._open[tag] = self._open.get(tag, 0) + 1
+
+    def handle_endtag(self, tag):
+        if self._open.get(tag):
+            self._open[tag] -= 1
+
+
+def _svg_image_src(attrs: List[Tuple[str, Optional[str]]]) -> Optional[str]:
+    """The `src` of an <img> the splice may replace, or None to leave it
+    alone: attribute names within _SVG_IMAGE_ATTRS, none repeated (a
+    second src must never be discarded unseen — lint checks every one),
+    and a src that is a local path ending in .svg."""
+    names = [name for name, _ in attrs]
+    if len(set(names)) != len(names) or not set(names) <= _SVG_IMAGE_ATTRS:
+        return None
+    src = dict(attrs).get("src") or ""
+    if not src or src.startswith("#") or src.startswith("data:") or _is_remote(src):
+        return None
+    if not src.lower().endswith(".svg"):
+        return None
+    return src
+
+
+def _splice_svg_images(
+    html: str, base_dir: Path, svg_sources: Optional[List[Path]] = None
+) -> Tuple[str, List[str]]:
+    """`html` with every qualifying ``<img src="X.svg">`` replaced by a
+    wrapper <span> holding the sanitized SVG from the local file X.svg
+    (resolved against `base_dir`, the content file's directory). Returns
+    ``(html, warnings)``; `warnings` are the sanitizer's drop lines,
+    ``image X.svg: dropped …``. When `svg_sources` is a list, the resolved
+    path of every SVG read is appended to it (the CLI refuses to write its
+    output over one).
+
+    Runs after the template render (markdown already sanitized) and before
+    inline_images and lint. A page with no ``<img`` is returned as the same
+    string without a parse; a page the parser cannot read, or with no
+    qualifying tag, is returned unchanged — every .svg left in it reaches
+    inline_images and lint, which refuse it as before. So no page that
+    rendered before this step existed can start failing here.
+
+    Raises ContentError for a qualifying tag whose file is unsafe (absolute,
+    escapes `base_dir`), missing, unreadable or not one acceptable <svg>,
+    and for id collisions (_sanitize_svg_sources)."""
+    if "<img" not in html.lower():
+        return html, []
+    finder = _ImgTagFinder(html)
+    try:
+        finder.feed(html)
+        finder.close()
+    except Exception:  # noqa: BLE001 - fall through to the existing refusals
+        return html, []
+
+    spans: List[Tuple[int, int, Path, Dict[str, Optional[str]]]] = []
+    names: Dict[Path, str] = {}
+    rejected: List[str] = []
+    missing: List[str] = []
+    for start, end, attrs, raw in finder.tags:
+        src = _svg_image_src(attrs)
+        if src is None:
+            continue
+        if html[start:end] != raw:
+            # An offset bug, never expected: refuse rather than splice
+            # over the wrong bytes.
+            raise ContentError(
+                f"image {_svg_drop_label(src)}: could not locate its <img> "
+                "tag in the rendered page"
+            )
+        path, reason = resolve_local_image(src, base_dir)
+        if path is None:
+            rejected.append(f"{src} ({reason})")
+            continue
+        if not is_local_file(path):
+            missing.append(src)
+            continue
+        names.setdefault(path, src)
+        spans.append((start, end, path, dict(attrs)))
+    if rejected:
+        raise ContentError(
+            "unsafe local image path(s) in image attributes: " + "; ".join(rejected)
+        )
+    if missing:
+        raise ContentError("missing local image(s): " + ", ".join(missing))
+    if not spans:
+        return html, []
+
+    sources: Dict[Path, str] = {}
+    for path, src in names.items():
+        try:
+            sources[path] = path.read_text(encoding="utf-8")
+        except (OSError, ValueError) as e:
+            raise ContentError(
+                f"image {_svg_drop_label(src)}: cannot read the SVG file: "
+                f"{e.__class__.__name__}"
+            ) from e
+    sanitized, warnings = _sanitize_svg_sources(
+        sources, _page_ids(html, "SVG images"), names, subject="image", kind="image"
+    )
+    if svg_sources is not None:
+        svg_sources.extend(names)
+
+    parts: List[str] = []
+    cursor = 0
+    for start, end, path, attrs in spans:
+        parts.append(html[cursor:start])
+        parts.append(_svg_image_wrapper(attrs, sanitized[path]))
+        cursor = end
+    parts.append(html[cursor:])
+    return "".join(parts), warnings
+
+
+def _svg_image_wrapper(attrs: Dict[str, Optional[str]], svg: str) -> str:
+    """The <span> that replaces an admitted <img>: role="img" +
+    aria-label from a non-empty alt, aria-hidden="true" for an empty or
+    missing one (decorative), the title when present, and
+    SVG_IMAGE_STYLE. Values are the parsed attribute values, escaped
+    once."""
+    alt = attrs.get("alt") or ""
+    parts = ["<span"]
+    if alt:
+        parts.append(f' role="img" aria-label="{escape(alt, quote=True)}"')
+    else:
+        parts.append(' aria-hidden="true"')
+    title = attrs.get("title")
+    if title:
+        parts.append(f' title="{escape(title, quote=True)}"')
+    parts.append(f' style="{SVG_IMAGE_STYLE}">')
+    return "".join(parts) + svg + "</span>"
+
+
 def render_page(
     template_dir: Path,
     content: Dict[str, Any],
@@ -294,6 +545,7 @@ def render_page(
     *,
     base_dir: Optional[Path] = None,
     figures: Optional[Dict[str, str]] = None,
+    svg_sources: Optional[List[Path]] = None,
 ) -> str:
     """Full HTML string (assembled + inlined) for `content` rendered
     through the template in `template_dir`. `base_dir` is the directory
@@ -306,6 +558,11 @@ def render_page(
     what they were before the parameter existed. Whatever the sanitizer
     drops from a figure is reported as ``warning: figure NAME: …`` lines
     on stderr, with the other warnings.
+
+    A markdown image of a local ``.svg`` file is replaced by that SVG,
+    sanitized, inline (_splice_svg_images; docs/diagrams.md). When
+    `svg_sources` is a list, the resolved path of every such file is
+    appended to it, so a caller can refuse to write output over one.
 
     Raises ContentError if lint finds a hard error (any resource
     reference outside lint's self-contained allowlist, script tags where
@@ -375,7 +632,13 @@ def render_page(
             f"render: {e}"
         ) from e
 
-    html, img_warnings = inline_images(html, Path(base_dir) if base_dir else Path.cwd())
+    resolved_base = (Path(base_dir) if base_dir else Path.cwd()).resolve()
+    local_svgs: List[Path] = []
+    html, svg_image_warnings = _splice_svg_images(html, resolved_base, local_svgs)
+    if svg_sources is not None:
+        svg_sources.extend(local_svgs)
+
+    html, img_warnings = inline_images(html, resolved_base)
 
     # Defined on both paths: a page without --figure runs no figure code
     # and prints exactly the warnings it printed before.
@@ -386,16 +649,21 @@ def render_page(
     errors, warnings = lint_html(html, manifest, allowed_scripts=allowed_scripts)
     if errors:
         message = "; ".join(errors)
-        if figures:
-            # Lint judges the whole page and cannot say which part an
-            # error came from; point at the one new input.
+        # Lint judges the whole page and cannot say which part an error
+        # came from; point at the inputs that are new to it.
+        spliced = [
+            label
+            for label, present in (("--figure SVG", figures), ("an SVG image", local_svgs))
+            if present
+        ]
+        if spliced:
             message += (
-                " (this page includes --figure SVG: see 'What the "
-                "sanitizer removes' in docs/diagrams.md)"
+                f" (this page includes {' and '.join(spliced)}: see 'What "
+                "the sanitizer removes' in docs/diagrams.md)"
             )
         raise ContentError(message)
 
-    for w in [*img_warnings, *figure_warnings, *warnings]:
+    for w in [*svg_image_warnings, *img_warnings, *figure_warnings, *warnings]:
         print(f"warning: {w}", file=sys.stderr)
 
     return html

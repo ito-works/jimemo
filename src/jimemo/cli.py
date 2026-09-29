@@ -441,6 +441,7 @@ def _do_render(
             print(NO_BROWSER_MESSAGE, file=sys.stderr)
             return 1
 
+    svg_sources: list = []
     try:
         manifest = load_manifest(template_dir)
         content = load_content(content_path, manifest)
@@ -450,10 +451,28 @@ def _do_render(
             args.theme,
             base_dir=content_path.resolve().parent,
             figures=figures,
+            svg_sources=svg_sources,
         )
     except (ManifestError, ContentError) as e:
         print(str(e), file=sys.stderr)
         return 1
+
+    # An SVG image in the content (`![d](d.svg)`) is an input file just as a
+    # --figure is: `-o d.svg` would overwrite the diagram with the page. The
+    # files are only known once render_page has read them, so this check
+    # runs here — still before anything (HTML, PDF, or the PDF-only temp
+    # file) is written.
+    for target in (out_path, pdf_path):
+        if target is None:
+            continue
+        for svg_path in svg_sources:
+            if _same_file(target, svg_path):
+                print(
+                    f"output path {target} is an SVG image in the content; "
+                    "refusing to overwrite it",
+                    file=sys.stderr,
+                )
+                return 2
 
     if pdf_only:
         import tempfile

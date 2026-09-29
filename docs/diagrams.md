@@ -3,8 +3,16 @@
 jimemo templates have no diagram slot, and markdown-typed slots pass
 through the allowlist sanitizer — inline SVG written into a content file
 will not survive rendering. That is deliberate: content is untrusted.
-The supported route for diagrams is a placeholder paragraph in the content
-plus `jimemo render --figure`, which splices an SVG file in its place.
+There are two supported routes, and both put the SVG into the page through
+the same sanitizer:
+
+- an SVG file referenced as an ordinary markdown image, `![alt](diagram.svg)`
+  (Route 2 below) — the simplest, nothing on the command line;
+- a placeholder paragraph in the content plus `jimemo render --figure`, which
+  splices an SVG file in its place.
+
+Use one route per file: the same SVG used both ways defines its ids twice
+and is refused.
 The patterns below were worked out on a real page (a tax-mechanics
 explainer with four diagrams) and are the difference between an SVG that
 fights the page and one that looks native.
@@ -111,8 +119,8 @@ publishing.
 
 Inline SVG shares the page's one `id` namespace. Two figures that both
 define `id="grad"` are refused, and so is a figure id the page already
-uses — a heading anchor, or a chart's canvas, whose script would
-otherwise find the SVG element first and never draw. Give each figure's
+uses — a heading anchor, an SVG image (Route 2), or a chart's canvas,
+whose script would otherwise find the SVG element first and never draw. Give each figure's
 ids a distinct prefix (`baskets-grad`, `timeline-arrow`). An `id`
 containing whitespace or a control character is dropped.
 
@@ -124,6 +132,52 @@ For a one-off tweak the old draft loop still works: render without
 (`publish` and `pdf` re-run the same check). A hand splice is not
 sanitized, and re-rendering the content file overwrites it — keep the SVG
 in a file if you expect to re-render, or use `--figure`.
+
+## Route 2: an SVG file as a markdown image
+
+Put the SVG file beside the content file and reference it like any image:
+
+```markdown
+The flow, end to end:
+
+![Orders move from intake to billing in three steps.](flow.svg)
+```
+
+`jimemo render` replaces that image with the SVG itself, rebuilt through
+the sanitizer described above, inline in the page:
+
+```html
+<span role="img" aria-label="Orders move …" style="display:block;contain:paint"><svg …>…</svg></span>
+```
+
+The admitted form is inline `<svg>` markup, not a `data:image/svg+xml` URI:
+an SVG loaded through `<img>` is a separate document that the page's
+`--jm-*` tokens cannot reach, and the self-containment lint keeps refusing
+every `data:image/svg+xml` URI. So the colouring rules below apply unchanged.
+
+- The alt text becomes the wrapper's `aria-label` (with `role="img"`); an
+  empty alt, `![](flow.svg)`, marks the drawing decorative
+  (`aria-hidden="true"`). A title, `![alt](flow.svg "Tip")`, is kept.
+- The wrapper is a `<span>` so the image can sit in a paragraph, a list item
+  or a table cell; `display:block` gives it the column's width and
+  `contain:paint` keeps it inside its own box, as `--figure` does.
+- The file must be local, a relative path inside the content file's
+  directory, and end in `.svg`. An absolute path, a path that leaves the
+  directory (`..` or a symlink), a missing file, a file that is not one
+  `<svg>` element, or one that is not UTF-8 stops the render, naming it.
+- What the sanitizer removes is exactly the list in "What the sanitizer
+  removes"; the stderr lines start with `image` instead of `figure`:
+  `warning: image flow.svg: dropped element script (not allowlisted)`.
+- Ids share the page's one namespace with headings, charts, `--figure`
+  SVGs and other SVG images: one file used twice may repeat its own ids,
+  two files may not define the same id.
+- `jimemo render` refuses to write its output (`-o`, `--pdf`) over an SVG
+  image the content uses, including through a hard link or symlink.
+
+Only an image in the form markdown writes qualifies: an `<img>` with
+nothing but `src`, `alt` and `title`, each once. An SVG in `srcset`,
+`<source>`, a video `poster`, or on an `<img>` with any other attribute is
+still refused as an image type jimemo cannot inline.
 
 ## Why inline SVG, not `<img>`
 
