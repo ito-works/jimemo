@@ -6,7 +6,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from jimemo.content import load_content
+from jimemo.content import _render_markdown, load_content
 from jimemo.errors import ContentError
 
 MANIFEST = {
@@ -249,3 +249,67 @@ def test_markdown_rendering_never_consults_entry_points(monkeypatch):
     html = str(_render_markdown("| a |\n| --- |\n| b |\n\n```\ncode\n```\n"))
     assert "<table>" in html
     assert "<code>" in html
+
+
+# --- soft line breaks between Japanese characters are dropped (jimemo#saa4) ---
+
+def test_soft_break_between_japanese_characters_is_dropped():
+    # A hard-wrapped Japanese paragraph must not render the newline as
+    # a space: Japanese has no inter-word spaces.
+    assert str(_render_markdown("外部の\n承認待ち")) == "<p>外部の承認待ち</p>"
+
+
+def test_soft_break_between_kana_joins():
+    assert "カタカナひらがな" in str(_render_markdown("カタカナ\nひらがな"))
+
+
+def test_soft_break_next_to_fullwidth_punctuation_joins():
+    assert "括弧（例）続き" in str(_render_markdown("括弧（例）\n続き"))
+    assert "一つ、二つ" in str(_render_markdown("一つ、\n二つ"))
+
+
+def test_soft_break_next_to_latin_keeps_newline():
+    # Only the two characters adjacent to the newline decide; a Latin
+    # letter, digit, ASCII space or ASCII punctuation on either side
+    # keeps it ("the end\nof line" still renders as two words).
+    assert "text\n承認待ち" in str(_render_markdown("text\n承認待ち"))
+    assert "承認待ち\ntext" in str(_render_markdown("承認待ち\ntext"))
+    assert "数字 1,234\n続き" in str(_render_markdown("数字 1,234\n続き"))
+    assert "the end\nof line" in str(_render_markdown("the end\nof line"))
+
+
+def test_soft_break_next_to_hangul_keeps_newline():
+    # Korean is written with spaces, so the break stays.
+    assert "한국어\n문장" in str(_render_markdown("한국어\n문장"))
+
+
+def test_soft_break_inside_code_is_kept():
+    fenced = str(_render_markdown("```\n外部の\n承認待ち\n```\n"))
+    assert "<code>外部の\n承認待ち" in fenced
+    inline = str(_render_markdown("`外部の\n承認`"))
+    assert "<code>外部の\n承認</code>" in inline
+
+
+def test_hard_break_survives_with_following_text_intact():
+    html = str(_render_markdown("外部の  \n承認"))
+    assert "<br" in html
+    assert "承認" in html
+
+
+def test_load_content_joins_japanese_soft_breaks_in_body_and_data_slot(tmp_path):
+    f = tmp_path / "brief.md"
+    f.write_text(
+        "---\n"
+        "title: T\n"
+        "sections:\n"
+        "  - heading: First\n"
+        '    body: "外部の\\n承認待ち"\n'
+        "---\n"
+        "遅れの原因は外部の\n"
+        "承認待ちで、来週の月曜日に解消する見込みである。\n"
+    )
+    content = load_content(f, MANIFEST)
+    assert "外部の承認待ち" in content["body"]
+    assert "外部の\n承認待ち" not in content["body"]
+    assert "外部の承認待ち" in content["sections"][0]["body"]
+    assert "外部の\n承認待ち" not in content["sections"][0]["body"]
