@@ -69,7 +69,7 @@ _JAPANESE_RANGES = (
     "\uf900-\ufaff"              # Han, compatibility ideographs
     "\U00020000-\U0002fa1f"      # Han, supplements
     "\uff00-\uff9f"              # fullwidth forms and halfwidth katakana: （）！？０ ｶﾅ
-    "\uffe0-\uffef"              # fullwidth signs: ￥ ￣ (U+FFA0-FFDF, halfwidth Hangul, stays out: Korean keeps its breaks)
+    "\uffe0-\uffef"              # fullwidth signs ￥￣ and halfwidth symbol variants; U+FFA0-FFDF (halfwidth Hangul) stays out: Korean keeps its breaks
 )
 _JAPANESE_SOFT_BREAK_RE = re.compile(
     f"(?<=[{_JAPANESE_RANGES}])\n(?=[{_JAPANESE_RANGES}])"
