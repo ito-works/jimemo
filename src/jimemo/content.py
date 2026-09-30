@@ -68,11 +68,58 @@ _JAPANESE_RANGES = (
     "\u4e00-\u9fff"              # Han, unified ideographs
     "\uf900-\ufaff"              # Han, compatibility ideographs
     "\U00020000-\U0002fa1f"      # Han, supplements
-    "\uff00-\uffef"              # halfwidth/fullwidth forms: （）！？０
+    "\uff00-\uff9f"              # fullwidth forms and halfwidth katakana: （）！？０ ｶﾅ
+    "\uffe0-\uffef"              # fullwidth signs: ￥ ￣ (U+FFA0-FFDF, halfwidth Hangul, stays out: Korean keeps its breaks)
 )
 _JAPANESE_SOFT_BREAK_RE = re.compile(
     f"(?<=[{_JAPANESE_RANGES}])\n(?=[{_JAPANESE_RANGES}])"
 )
+_JAPANESE_CHAR_RE = re.compile(f"[{_JAPANESE_RANGES}]")
+# Inline elements whose text reads as part of the surrounding prose, so a
+# soft break on either side of one is judged across the node boundary
+# (承認は**必要**\nです puts 必要 in a <strong> and \nです in its tail).
+# Block children are left alone: the "\n" between two <li> is prettify's
+# formatting, not a soft break.
+_INLINE_TAGS = frozenset((
+    "a", "abbr", "b", "bdi", "bdo", "cite", "code", "del", "dfn", "em", "i",
+    "ins", "kbd", "mark", "q", "s", "samp", "small", "span", "strong", "sub",
+    "sup", "time", "u", "var",
+))
+
+
+def _is_japanese(ch: "str | None") -> bool:
+    return bool(ch) and _JAPANESE_CHAR_RE.match(ch) is not None
+
+
+def _first_char(element) -> "str | None":
+    """First rendered character of an inline element's subtree, or None
+    when it renders none (a <br />, an empty span)."""
+    if element.tag not in _INLINE_TAGS:
+        return None
+    if element.text:
+        return element.text[0]
+    for child in element:
+        ch = _first_char(child)
+        if ch is not None:
+            return ch
+        if child.tail:
+            return child.tail[0]
+    return None
+
+
+def _last_char(element) -> "str | None":
+    """Last rendered character of an inline element's subtree, or None."""
+    if element.tag not in _INLINE_TAGS:
+        return None
+    for child in reversed(list(element)):
+        if child.tail:
+            return child.tail[-1]
+        ch = _last_char(child)
+        if ch is not None:
+            return ch
+    if element.text:
+        return element.text[-1]
+    return None
 
 
 class JapaneseSoftBreakTreeprocessor(Treeprocessor):
@@ -81,7 +128,10 @@ class JapaneseSoftBreakTreeprocessor(Treeprocessor):
     Registered below 'inline' so code spans are already `code` elements
     by the time it runs, and above 'unescape'; skipping the `pre`/`code`
     subtrees (a tail belongs to the parent's content, so it is still
-    joined from there) keeps code byte-identical. A hard break is a
+    joined from there) keeps code byte-identical. Adjacency is judged
+    across an INLINE child's boundary too (承認は**必要**\nです), never
+    across a block child's: the "\n" prettify puts between two <li> is
+    formatting and stays. A hard break is a
     `<br />` element, not text, and survives with its following text
     intact; the "\n" 'prettify' leaves at the start of a tail has no
     character before it and is kept."""
@@ -94,10 +144,30 @@ class JapaneseSoftBreakTreeprocessor(Treeprocessor):
             return
         if element.text:
             element.text = _JAPANESE_SOFT_BREAK_RE.sub("", element.text)
-        for child in element:
+        children = list(element)
+        for i, child in enumerate(children):
+            # A "\n" ending the segment before an inline child, with
+            # Japanese on both sides of the node boundary, is a soft break.
+            before = element.text if i == 0 else children[i - 1].tail
+            if before and before.endswith("\n") and _is_japanese(_first_char(child)):
+                prev_ch = before[-2] if len(before) > 1 else (
+                    _last_char(children[i - 1]) if i > 0 else None)
+                if _is_japanese(prev_ch):
+                    before = before[:-1]
+                    if i == 0:
+                        element.text = before
+                    else:
+                        children[i - 1].tail = before
             self._join(child)
             if child.tail:
                 child.tail = _JAPANESE_SOFT_BREAK_RE.sub("", child.tail)
+                # A "\n" starting an inline child's tail, with the child's
+                # last character and the tail's next character both Japanese.
+                if child.tail.startswith("\n") and _is_japanese(_last_char(child)):
+                    next_ch = child.tail[1] if len(child.tail) > 1 else (
+                        _first_char(children[i + 1]) if i + 1 < len(children) else None)
+                    if _is_japanese(next_ch):
+                        child.tail = child.tail[1:]
 
 
 class JapaneseSoftBreakExtension(Extension):
