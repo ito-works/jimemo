@@ -28,8 +28,10 @@ from .sanitize import sanitize_html
 add_vendor_to_path()
 import markdown  # noqa: E402
 import yaml  # noqa: E402
+from markdown.extensions import Extension  # noqa: E402
 from markdown.extensions.fenced_code import FencedCodeExtension  # noqa: E402
 from markdown.extensions.tables import TableExtension  # noqa: E402
+from markdown.treeprocessors import Treeprocessor  # noqa: E402
 from markupsafe import Markup  # noqa: E402
 
 
@@ -45,7 +47,64 @@ def markdown_extensions() -> list:
     regardless of version, so this stays (jimemo#adw9).
     Fresh instances per call: Extension objects carry per-run config
     and are not documented as reuse-safe across Markdown instances."""
-    return [TableExtension(), FencedCodeExtension()]
+    return [TableExtension(), FencedCodeExtension(), JapaneseSoftBreakExtension()]
+
+
+# jimemo#saa4: a "\n" inside prose text renders as a space, and Japanese
+# has no inter-word spaces, so a hard-wrapped paragraph showed a visible
+# gap ("外部の 承認待ち"). A soft break is dropped when BOTH characters
+# adjacent to it are Japanese; anything else on either side -- a Latin
+# letter, digit, ASCII space or punctuation, Hangul (Korean is written
+# with spaces) -- keeps the newline. Code is excluded by structure, not
+# by a regex over the source: the treeprocessor below never descends
+# into `pre`/`code`, so fenced and indented code blocks and inline code
+# spans keep every newline even when Japanese sits on both sides.
+_JAPANESE_RANGES = (
+    "\u3000-\u303f"              # CJK symbols and punctuation: 、。「」
+    "\u3040-\u309f"              # Hiragana
+    "\u30a0-\u30ff"              # Katakana
+    "\u31f0-\u31ff"              # Katakana phonetic extensions
+    "\u3400-\u4dbf"              # Han, extension A
+    "\u4e00-\u9fff"              # Han, unified ideographs
+    "\uf900-\ufaff"              # Han, compatibility ideographs
+    "\U00020000-\U0002fa1f"      # Han, supplements
+    "\uff00-\uffef"              # halfwidth/fullwidth forms: （）！？０
+)
+_JAPANESE_SOFT_BREAK_RE = re.compile(
+    f"(?<=[{_JAPANESE_RANGES}])\n(?=[{_JAPANESE_RANGES}])"
+)
+
+
+class JapaneseSoftBreakTreeprocessor(Treeprocessor):
+    """Drop soft line breaks between two Japanese characters (jimemo#saa4).
+
+    Registered below 'inline' so code spans are already `code` elements
+    by the time it runs, and above 'unescape'; skipping the `pre`/`code`
+    subtrees (a tail belongs to the parent's content, so it is still
+    joined from there) keeps code byte-identical. A hard break is a
+    `<br />` element, not text, and survives with its following text
+    intact; the "\n" 'prettify' leaves at the start of a tail has no
+    character before it and is kept."""
+
+    def run(self, root):
+        self._join(root)
+
+    def _join(self, element):
+        if element.tag in ("pre", "code"):
+            return
+        if element.text:
+            element.text = _JAPANESE_SOFT_BREAK_RE.sub("", element.text)
+        for child in element:
+            self._join(child)
+            if child.tail:
+                child.tail = _JAPANESE_SOFT_BREAK_RE.sub("", child.tail)
+
+
+class JapaneseSoftBreakExtension(Extension):
+    def extendMarkdown(self, md):
+        md.treeprocessors.register(
+            JapaneseSoftBreakTreeprocessor(md), "japanese_soft_break", 5
+        )
 
 
 _TABLE_TAG_RE = re.compile(r"</?table>")

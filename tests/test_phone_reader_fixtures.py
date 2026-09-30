@@ -38,6 +38,18 @@ def test_briefing_fixture_renders_with_table_svg_and_japanese():
     assert errors == []
 
 
+def test_briefing_fixture_drops_japanese_soft_breaks():
+    # jimemo#saa4: the hard-wrapped Japanese paragraph in briefing-ja.md
+    # must render joined, with no newline between 外部の and 承認待ち.
+    template = REPO_ROOT / "templates" / "briefing"
+    manifest = load_manifest(template)
+    content_path = FIXTURES / "briefing-ja.md"
+    html = render_page(template, load_content(content_path, manifest),
+                       base_dir=FIXTURES)
+    assert "外部の承認待ち" in html
+    assert "外部の\n承認待ち" not in html
+
+
 def test_markdown_tables_are_wrapped_in_a_scroll_box():
     html = str(_render_markdown("| a | b |\n|---|---|\n| 1 | 2 |"))
     assert html.startswith(TABLE_SCROLL_OPEN + "<table>")

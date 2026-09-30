@@ -36,7 +36,7 @@ Observed on 2026-09-30 (jimemo 0.0.4):
 - Fixed: a wide markdown table widened the whole page to 722px, so the
   phone zoomed out and all text shrank. Prose tables now scroll inside
   their own box below 40rem.
-- Not fixed, out of scope: a line break inside a Japanese paragraph in
-  the markdown source renders as a space between two Japanese
-  characters. Write each Japanese paragraph on one source line until
-  the renderer handles this.
+- Fixed (jimemo#saa4): a line break inside a Japanese paragraph in
+  the markdown source used to render as a space between two Japanese
+  characters. A soft break between two Japanese characters is now
+  dropped at render time.
