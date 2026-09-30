@@ -313,3 +313,44 @@ def test_load_content_joins_japanese_soft_breaks_in_body_and_data_slot(tmp_path)
     assert "外部の\n承認待ち" not in content["body"]
     assert "外部の承認待ち" in content["sections"][0]["body"]
     assert "外部の\n承認待ち" not in content["sections"][0]["body"]
+
+
+# --- the join also holds across an inline element's boundary (review of jimemo#saa4) ---
+
+def test_soft_break_after_inline_element_joins():
+    # 必要 sits in a <strong>; the "\n" is the first character of its tail.
+    assert str(_render_markdown("承認は**必要**\nです")) == "<p>承認は<strong>必要</strong>です</p>"
+    assert str(_render_markdown("[承認](https://e.example)\nです")) == (
+        '<p><a href="https://e.example">承認</a>です</p>'
+    )
+
+
+def test_soft_break_before_inline_element_joins():
+    assert str(_render_markdown("承認は\n**必要**です")) == "<p>承認は<strong>必要</strong>です</p>"
+    # The code span's own content is untouched; only the prose newline goes.
+    assert str(_render_markdown("外部の\n`コード`です")) == "<p>外部の<code>コード</code>です</p>"
+
+
+def test_soft_break_between_two_inline_elements_joins():
+    assert str(_render_markdown("**あ**\n**い**")) == "<p><strong>あ</strong><strong>い</strong></p>"
+
+
+def test_soft_break_next_to_inline_element_with_latin_keeps_newline():
+    assert str(_render_markdown("**word**\nです")) == "<p><strong>word</strong>\nです</p>"
+    assert str(_render_markdown("承認は\n**word**")) == "<p>承認は\n<strong>word</strong></p>"
+
+
+def test_block_formatting_newlines_are_not_soft_breaks():
+    # prettify's "\n" between two <li> is formatting, not prose, even with
+    # Japanese on both sides of it.
+    assert str(_render_markdown("- 日本\n- 語")) == "<ul>\n<li>日本</li>\n<li>語</li>\n</ul>"
+
+
+def test_hard_break_newline_before_japanese_is_kept():
+    assert str(_render_markdown("外部の  \n承認")) == "<p>外部の<br />\n承認</p>"
+
+
+def test_halfwidth_hangul_keeps_newline_but_halfwidth_katakana_joins():
+    assert "ﾡ\nﾢ" in str(_render_markdown("ﾡ\nﾢ"))          # U+FFA1, U+FFA2: halfwidth Hangul
+    assert "ｶﾅです" in str(_render_markdown("ｶﾅ\nです"))      # U+FF76, U+FF85: halfwidth katakana
+    assert "２日" in str(_render_markdown("２\n日"))           # fullwidth digit next to Han joins
