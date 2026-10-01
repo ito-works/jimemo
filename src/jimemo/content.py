@@ -91,15 +91,37 @@ def _is_japanese(ch: "str | None") -> bool:
     return bool(ch) and _JAPANESE_CHAR_RE.match(ch) is not None
 
 
+# An <img> or <br> is rendered content that renders no character, so it
+# is a barrier for the soft-break join (jimemo#vpq3): the rule joins two
+# adjacent rendered CHARACTERS, and an image adjoining the break -- at
+# any inline nesting depth -- must block it the way a non-inline tag
+# already does. The scanners return this sentinel when the
+# boundary-adjacent rendered thing is such a barrier, so a parent inline
+# does not look past it to further text the way it looks past an element
+# that renders nothing at all (an empty span).
+_BARRIER = object()
+_BARRIER_TAGS = frozenset(("img", "br"))
+
+
 def _first_char(element) -> "str | None":
     """First rendered character of an inline element's subtree, or None
-    when it renders none (a <br />, an empty span)."""
+    when it renders none (an empty span) or when the first rendered
+    thing in document order is an image or hard break."""
+    ch = _scan_first(element)
+    return None if ch is _BARRIER else ch
+
+
+def _scan_first(element):
+    """_first_char's walk: a character, None (renders nothing), or
+    _BARRIER (an img/br is the first rendered thing)."""
     if element.tag not in _INLINE_TAGS:
         return None
     if element.text:
         return element.text[0]
     for child in element:
-        ch = _first_char(child)
+        if child.tag in _BARRIER_TAGS:
+            return _BARRIER
+        ch = _scan_first(child)
         if ch is not None:
             return ch
         if child.tail:
@@ -108,13 +130,24 @@ def _first_char(element) -> "str | None":
 
 
 def _last_char(element) -> "str | None":
-    """Last rendered character of an inline element's subtree, or None."""
+    """Last rendered character of an inline element's subtree, or None
+    when it renders none or the last rendered thing in document order
+    is an image or hard break."""
+    ch = _scan_last(element)
+    return None if ch is _BARRIER else ch
+
+
+def _scan_last(element):
+    """_last_char's walk: a character, None, or _BARRIER (an img/br is
+    the last rendered thing)."""
     if element.tag not in _INLINE_TAGS:
         return None
     for child in reversed(list(element)):
         if child.tail:
             return child.tail[-1]
-        ch = _last_char(child)
+        if child.tag in _BARRIER_TAGS:
+            return _BARRIER
+        ch = _scan_last(child)
         if ch is not None:
             return ch
     if element.text:
@@ -131,7 +164,9 @@ class JapaneseSoftBreakTreeprocessor(Treeprocessor):
     joined from there) keeps code byte-identical. Adjacency is judged
     across an INLINE child's boundary too (承認は**必要**\nです), never
     across a block child's: the "\n" prettify puts between two <li> is
-    formatting and stays. A hard break is a
+    formatting and stays. An image or hard break adjoining the break is
+    rendered content but no character, so it blocks the join instead of
+    being looked past (jimemo#vpq3). A hard break is a
     `<br />` element, not text, and survives with its following text
     intact; the "\n" 'prettify' leaves at the start of a tail has no
     character before it and is kept."""

@@ -1,12 +1,13 @@
 import json
 import sys
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from jimemo.content import _render_markdown, load_content
+from jimemo.content import _first_char, _render_markdown, load_content
 from jimemo.errors import ContentError
 
 MANIFEST = {
@@ -354,3 +355,39 @@ def test_halfwidth_hangul_keeps_newline_but_halfwidth_katakana_joins():
     assert "ﾡ\nﾢ" in str(_render_markdown("ﾡ\nﾢ"))          # U+FFA1, U+FFA2: halfwidth Hangul
     assert "ｶﾅです" in str(_render_markdown("ｶﾅ\nです"))      # U+FF76, U+FF85: halfwidth katakana
     assert "２日" in str(_render_markdown("２\n日"))           # fullwidth digit next to Han joins
+
+
+# --- an image nested in an inline element is a join barrier (jimemo#vpq3) ---
+
+def test_soft_break_before_inline_image_keeps_newline():
+    # _first_char must not look past the <img> to the 本 in its tail:
+    # an image is rendered content that renders no character, so no
+    # character adjoins the break and the newline stays.
+    assert "日\n<strong><img" in str(_render_markdown("日\n**![図](plot.png)本**"))
+
+
+def test_soft_break_after_inline_image_keeps_newline():
+    # _last_char must not look past the <img> back to the 日 either.
+    assert "</strong>\n本" in str(_render_markdown("**日![図](plot.png)**\n本"))
+
+
+def test_soft_break_away_from_inline_image_still_joins():
+    # The image is not adjacent to the break on either side, so the
+    # join fires exactly as before.
+    assert "日<strong>本<img" in str(_render_markdown("日\n**本![図](plot.png)**"))
+    assert "日</strong>本" in str(_render_markdown("**![図](plot.png)日**\n本"))
+
+
+def test_first_char_passes_empty_span_but_stops_at_image():
+    # Pinned directly on the helper: an element that renders nothing at
+    # all (an empty span) is "nothing" and the scan continues to its
+    # tail; an <img> is a barrier, exactly as a <br> is.
+    strong = ET.Element("strong")
+    span = ET.SubElement(strong, "span")
+    span.tail = "本"
+    assert _first_char(strong) == "本"
+
+    strong = ET.Element("strong")
+    img = ET.SubElement(strong, "img")
+    img.tail = "本"
+    assert _first_char(strong) is None
