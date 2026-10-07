@@ -158,22 +158,22 @@ def test_real_repo_charts_vendor_is_clean():
     assert verify_checksums(repo_charts_vendor) == []
 
 
-def test_real_tomli_tamper_is_caught(tmp_path):
-    # Doctor-tamper coverage for the newly vendored tomli/ files: copy the
-    # real vendor/ tree (SHA256SUMS included), tamper a real tomli file,
-    # and confirm verify_checksums -- the same function doctor calls --
-    # reports it. Demonstrates the generic vendor-tamper check (already
-    # exercised by test_real_repo_vendor_is_clean above) covers tomli
-    # specifically, since SHA256SUMS is a complete allowlist over all of
-    # vendor/, not just the pre-existing packages.
+def test_real_vendored_file_tamper_is_caught(tmp_path):
+    # Doctor-tamper coverage over a real vendored file: copy the real
+    # vendor/ tree (SHA256SUMS included), tamper one file, and confirm
+    # verify_checksums -- the same function doctor calls -- reports it.
+    # Demonstrates the generic vendor-tamper check (already exercised by
+    # test_real_repo_vendor_is_clean above) covers every package, since
+    # SHA256SUMS is a complete allowlist over all of vendor/. The target
+    # was tomli/_parser.py until jimemo#bgaw dropped vendored tomli.
     real_vendor = Path(__file__).resolve().parents[1] / "vendor"
     copy = tmp_path / "vendor"
     shutil.copytree(real_vendor, copy)
-    target = copy / "tomli" / "_parser.py"
+    target = copy / "markdown" / "serializers.py"
     assert target.is_file()
     target.write_text(target.read_text() + "\n# tampered\n")
     problems = verify_checksums(copy)
-    assert any("checksum mismatch" in p and "tomli/_parser.py" in p for p in problems)
+    assert any("checksum mismatch" in p and "markdown/serializers.py" in p for p in problems)
 
 
 def _fresh_interpreter(
@@ -214,7 +214,7 @@ def test_add_vendor_import_writes_no_pyc_under_vendor(tmp_path):
     above) and reads like a tamper alarm. CPython must still cache the
     import -- just in sys.pycache_prefix, outside the repo."""
     vendor = tmp_path / "vendor"
-    shutil.copytree(REPO / "vendor" / "tomli", vendor / "tomli")
+    shutil.copytree(REPO / "vendor" / "yaml", vendor / "yaml")
     code = (
         "import sys\n"
         "from pathlib import Path\n"
@@ -222,8 +222,8 @@ def test_add_vendor_import_writes_no_pyc_under_vendor(tmp_path):
         "from jimemo import _vendor\n"
         f"_vendor.VENDOR_DIR = {str(vendor)!r}\n"
         "_vendor.add_vendor_to_path()\n"
-        "import tomli\n"
-        "assert Path(tomli.__file__).resolve().is_relative_to("
+        "import yaml\n"
+        "assert Path(yaml.__file__).resolve().is_relative_to("
         "Path(sys.path[0]).resolve())\n"
         "print('PYCACHE_PREFIX', sys.pycache_prefix)\n"
     )

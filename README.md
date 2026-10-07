@@ -355,7 +355,7 @@ ok   python 3.14.6
 ok   entry point /Users/you/.local/bin/jimemo -> /usr/local/bin/python3.14 (3.14.6)
 ok   vendor checksums (/path/to/jimemo/vendor)
 ok   charts vendored (chart.js 4.5.1)
-ok   vendored imports (jinja2, markdown, yaml, tomli)
+ok   vendored imports (jinja2, markdown, yaml)
 ok   markdown render path (tables, fenced_code)
 ok   suitability labels fresh (or none recorded)
 ok   pdf browser (/Applications/Google Chrome.app/Contents/MacOS/Google Chrome)
@@ -549,7 +549,7 @@ are in [`docs/publish-setup.md`](docs/publish-setup.md).
   export's tokens and font references; it never opens, imports, or
   executes any code the export directory contains.
 - **Vendored, checksummed dependencies.** Jinja2, MarkupSafe, Markdown,
-  PyYAML, tomli, and Chart.js are vendored into the repo, not fetched
+  PyYAML, and Chart.js are vendored into the repo, not fetched
   at install or run time; `jimemo doctor` verifies them against
   checked-in SHA-256 sums and refuses to import a tampered copy.
 
