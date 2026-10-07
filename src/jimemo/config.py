@@ -30,11 +30,11 @@ purge/list); jimemo must never write one into config.toml.
 """
 import os
 import re
+import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from ._vendor import add_vendor_to_path
 from .errors import ConfigError
 
 _CLOUDFLARE_FIELDS = ("project", "account_id", "kv_namespace_id", "base_url")
@@ -108,9 +108,6 @@ def load_config(path: Optional[Path] = None) -> Config:
         raise ConfigError(
             f"no config file at {cfg_path}; run `jimemo publish setup` to create one"
         )
-
-    add_vendor_to_path()
-    import tomllib
 
     try:
         data = tomllib.loads(cfg_path.read_text())
