@@ -30,7 +30,6 @@ purge/list); jimemo must never write one into config.toml.
 """
 import os
 import re
-import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -108,6 +107,12 @@ def load_config(path: Optional[Path] = None) -> Config:
         raise ConfigError(
             f"no config file at {cfg_path}; run `jimemo publish setup` to create one"
         )
+
+    # Function-local on purpose: jimemo must still import on an interpreter
+    # below the floor so `jimemo doctor` can report the floor (tomllib is
+    # 3.11+). No vendor path is added first: tomllib is the standard
+    # library's, and config.py has no vendored dependency (jimemo#bgaw).
+    import tomllib
 
     try:
         data = tomllib.loads(cfg_path.read_text())
