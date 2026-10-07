@@ -220,9 +220,8 @@ def cmd_doctor(args) -> int:
         try:
             import jinja2  # noqa: F401
             import markdown  # noqa: F401
-            import tomli  # noqa: F401
             import yaml  # noqa: F401
-            print("ok   vendored imports (jinja2, markdown, yaml, tomli)")
+            print("ok   vendored imports (jinja2, markdown, yaml)")
         except ImportError as e:
             print(f"FAIL vendored imports: {e}")
             imports_ok = False
@@ -266,8 +265,10 @@ def cmd_doctor(args) -> int:
         print("ok   suitability labels fresh (or none recorded)")
 
     # PDF browser is optional, like publish: report, never FAIL. Reading
-    # config.toml needs vendored tomli, so with failed checksums only
-    # auto-detection runs (same gate as the vendored-imports step above).
+    # config.toml parses it with the stdlib tomllib (floor 3.13.6,
+    # jimemo#bgaw), so a failed checksum does not affect the parse
+    # itself; the gate below still mirrors the vendored-imports step
+    # above (with failed checksums only auto-detection runs).
     # jimemo.errors and jimemo.pdf are stdlib-only, safe pre-checksum-gate.
     from .errors import ConfigError, PdfError
     from .pdf import find_browser

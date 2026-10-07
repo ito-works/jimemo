@@ -94,11 +94,9 @@ contract in detail.
     discovery, vendor checksum verification, and `sys.path` setup
     (vendor verification and discovery plumbing).
 - `vendor/` — pinned pure-Python dependencies (Jinja2, MarkupSafe,
-  Markdown, PyYAML, tomli) with `SHA256SUMS`; verified by `jimemo doctor`.
-  tomli parses `~/.jimemo/config.toml`. It predates the 3.13.6 floor
-  (`jimemo.PYTHON_FLOOR`), which always has stdlib `tomllib`; swapping to
-  `tomllib` is a separate change because it rewrites `vendor/SHA256SUMS`
-  (jimemo#bgaw).
+  Markdown, PyYAML) with `SHA256SUMS`; verified by `jimemo doctor`.
+  `~/.jimemo/config.toml` is parsed with the stdlib `tomllib` — the
+  3.13.6 floor (`jimemo.PYTHON_FLOOR`) always has it (jimemo#bgaw).
 - `charts/vendor/chartjs/` — vendored browser-side Chart.js
   (`chart.umd.min.js` + `LICENSE.md`), pinned and checksummed like
   `vendor/` but kept in its own tree with its own `SHA256SUMS` since
@@ -181,7 +179,7 @@ contract in detail.
     `cmd_import_design`) catches it, prints the message to stderr, and
     exits 1 — the same pattern as `ManifestError`/`ContentError`.
 - `src/jimemo/config.py` — `load_config`: parses `~/.jimemo/config.toml`
-  (vendored `tomli`) into a `Config`/`PublishConfig`; missing/invalid
+  (stdlib `tomllib`) into a `Config`/`PublishConfig`; missing/invalid
   config raises `ConfigError` with a "run `jimemo publish setup`"
   message. Stores only non-secret identifiers (a command name, or a
   Cloudflare project/account/KV-namespace id + base URL) — never a

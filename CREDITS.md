@@ -65,4 +65,3 @@ importing it. Versions are pinned in the table below.
 | Markdown | 3.10.2 | BSD-3-Clause | https://pypi.org/project/Markdown/ |
 | PyYAML | 6.0.3 | MIT | https://pypi.org/project/PyYAML/ |
 | Chart.js | 4.5.1 | MIT | https://registry.npmjs.org/chart.js/-/chart.js-4.5.1.tgz |
-| tomli | 2.4.1 | MIT | https://pypi.org/project/tomli/ |

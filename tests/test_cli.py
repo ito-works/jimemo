@@ -77,7 +77,7 @@ def test_doctor_on_clean_repo(capsys):
     out = capsys.readouterr().out
     assert "python" in out.lower()
     assert "vendor" in out.lower()
-    assert "ok   vendored imports (jinja2, markdown, yaml, tomli)" in out
+    assert "ok   vendored imports (jinja2, markdown, yaml)" in out
     assert "ok   charts vendored (chart.js 4.5.1)" in out
 
 
