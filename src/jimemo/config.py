@@ -16,11 +16,9 @@ Schema::
     [pdf]                             # optional; all keys optional
     browser = "/path/to/chromium"     # else jimemo pdf auto-detects
 
-Parsed with the vendored ``tomli`` reader (see ``_vendor.py``). jimemo's
-Python floor is 3.13.6 (see ``jimemo.PYTHON_FLOOR``), so the stdlib
-``tomllib`` is now always available; ``tomli`` is kept for the moment
-because dropping a vendored dependency changes ``vendor/SHA256SUMS`` and
-its checksum tests, which is its own change (jimemo#bgaw).
+Parsed with the standard library's ``tomllib`` (jimemo's Python floor
+is 3.13.6, see ``jimemo.PYTHON_FLOOR``, which always ships ``tomllib``;
+jimemo#bgaw dropped the vendored ``tomli`` reader this used to need).
 
 SECURITY: this file NEVER holds secrets. It stores only non-secret
 identifiers -- a command name, or a Cloudflare project/account/KV-namespace
@@ -112,11 +110,11 @@ def load_config(path: Optional[Path] = None) -> Config:
         )
 
     add_vendor_to_path()
-    import tomli
+    import tomllib
 
     try:
-        data = tomli.loads(cfg_path.read_text())
-    except tomli.TOMLDecodeError as e:
+        data = tomllib.loads(cfg_path.read_text())
+    except tomllib.TOMLDecodeError as e:
         raise ConfigError(f"{cfg_path}: invalid TOML: {e}")
 
     publish_data = data.get("publish")

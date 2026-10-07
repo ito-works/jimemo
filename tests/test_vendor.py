@@ -17,11 +17,26 @@ def test_vendored_jinja2_is_used():
     assert Path(jinja2.__file__).resolve().is_relative_to(VENDOR_DIR)
 
 
-def test_vendored_tomli_is_used():
-    add_vendor_to_path()
-    import tomli
-    assert Path(tomli.__file__).resolve().is_relative_to(VENDOR_DIR)
-    assert tomli.loads("a = 1\n") == {"a": 1}
+def test_config_uses_stdlib_tomllib_not_tomli(tmp_path):
+    # jimemo#bgaw: config.toml is parsed with the stdlib tomllib (the
+    # Python floor, 3.13.6, always ships it) and the vendored tomli is
+    # gone. config.py's `import tomllib` is function-local inside
+    # load_config(), so there is no jimemo.config.tomllib module
+    # attribute to inspect -- instead load a real config file and prove
+    # the stdlib module did the parsing while tomli never loads.
+    assert "tomli" not in sys.modules
+    sys.modules.pop("tomllib", None)
+
+    import jimemo.config
+
+    cfg = tmp_path / "config.toml"
+    cfg.write_text('[publish]\nbackend = "command"\ncommand = "notes-publish"\n')
+    assert jimemo.config.load_config(cfg).publish.command == "notes-publish"
+
+    toml_mod = sys.modules["tomllib"]
+    assert toml_mod.__name__ == "tomllib"
+    assert not Path(toml_mod.__file__).resolve().is_relative_to(VENDOR_DIR)
+    assert "tomli" not in sys.modules
 
 
 def test_add_vendor_is_idempotent():
