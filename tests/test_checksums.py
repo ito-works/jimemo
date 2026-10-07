@@ -238,7 +238,7 @@ def test_add_vendor_import_writes_no_pyc_under_vendor(tmp_path):
     prefix = Path(prefix_line.split(" ", 1)[1])
     assert not prefix.is_relative_to(vendor)
     # The import really was cached (not silently uncached), just elsewhere.
-    assert [p for p in prefix.rglob("*.pyc") if "tomli" in p.parts]
+    assert [p for p in prefix.rglob("*.pyc") if "yaml" in p.parts]
 
 
 def test_planted_vendor_pyc_with_matching_header_is_not_used(tmp_path):
