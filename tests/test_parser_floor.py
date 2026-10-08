@@ -366,7 +366,7 @@ def test_doctor_reports_tomllib_missing_on_a_real_sub_floor_interpreter(
     # cmd_doctor's existing `WARNING config:` handler: one more line in
     # the report, never a crash.
     home = tmp_path / "home"
-    (home / ".jimemo").mkdir()
+    (home / ".jimemo").mkdir(parents=True)
     (home / ".jimemo" / "config.toml").write_text(
         '[pdf]\nbrowser = "chromium"\n', encoding="utf-8"
     )
