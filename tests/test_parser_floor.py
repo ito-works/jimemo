@@ -144,7 +144,7 @@ def test_prereleases_are_refused_even_above_the_floor(version, monkeypatch):
     ],
 )
 def test_running_version_spells_it_as_cpython_does(version, expected):
-    # platform.python_version() reports 3.14.0b1 as "3.14.0", which is the
+    # Three-component formatting reports 3.14.0b1 as "3.14.0", which is the
     # ambiguity that let a pre-release look supported. This builds the
     # string from version_info so the releaselevel survives.
     assert _parser_floor.running_version(version) == expected

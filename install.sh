@@ -251,7 +251,7 @@ probe_python() {
     _cmd="$1"
     _label="$2"
 
-    # Ask once, for all four fields. `|| PY_PARTS=''` keeps an interpreter
+    # Ask once, for all five fields. `|| PY_PARTS=''` keeps an interpreter
     # that exits non-zero from killing the script silently under `set -e`:
     # without it the user gets an exit status and no message at all. The
     # sentinel is appended only on exit 0 and, more to the point, keeps the
@@ -306,7 +306,7 @@ EOF
                 return 1 ;;
         esac
     done
-    # All four fields and no more: a partial or overlong answer is not the
+    # All five fields and no more: a partial or overlong answer is not the
     # answer we asked for, and guessing the rest is how a floor check ends
     # up trusting a version nobody reported.
     if [ -z "$PY_LEVEL" ] || [ -z "$PY_VER" ] || [ -n "$PY_EXTRA" ]; then

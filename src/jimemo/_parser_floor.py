@@ -92,9 +92,10 @@ _RELEASELEVEL_SUFFIX = {"alpha": "a", "beta": "b", "candidate": "rc"}
 def running_version(version_info=None):
     """The running interpreter's version as CPython spells it, built from
     ``sys.version_info`` alone so a test can substitute one: ``3.14.7``,
-    ``3.14.0b1``. Not ``platform.python_version()``, which reports a
-    pre-release as though it were final (``3.14.0`` for 3.14.0b1) -- the
-    exact ambiguity that made a pre-release look supported."""
+    ``3.14.0b1``. Not cmd_doctor's earlier three-component formatting,
+    which printed a pre-release as though it were final (``3.14.0`` for
+    3.14.0b1) -- the exact ambiguity that made a pre-release look
+    supported."""
     v = version_info if version_info is not None else sys.version_info
     text = "{0}.{1}.{2}".format(v[0], v[1], v[2])
     if v[3] != "final":
