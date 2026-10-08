@@ -39,16 +39,18 @@ PACKAGE_INIT = REPO_ROOT / "src" / "jimemo" / "__init__.py"
 _FRESH_HOME = tempfile.TemporaryDirectory(prefix="jimemo-fresh-home-")
 
 
-def _fresh(code, executable=None):
+def _fresh(code, executable=None, home=None):
     """Run `code` in a fresh interpreter with src/ importable. HOME is an
     empty temp dir: `jimemo doctor` reads -- and runs -- the interpreter
     bound in ~/.local/bin/jimemo (jimemo#p0nk), and a stale wrapper on the
-    developer's machine must not change what these tests see."""
+    developer's machine must not change what these tests see. `home`
+    overrides that empty HOME for tests that need a file inside it (a
+    config.toml); the caller owns the directory's lifetime."""
     env = {
         **os.environ,
         "PYTHONPATH": str(REPO_ROOT / "src"),
         "PYTHONDONTWRITEBYTECODE": "1",
-        "HOME": _FRESH_HOME.name,
+        "HOME": str(home) if home is not None else _FRESH_HOME.name,
     }
     env.pop("JIMEMO_ENTRY_POINT", None)
     return subprocess.run(
@@ -330,3 +332,58 @@ def test_doctor_reports_the_sanitize_refusal_on_a_real_sub_floor_interpreter(
     assert markdown, result.stdout
     assert markdown[0].startswith("FAIL markdown render path: "), markdown[0]
     assert FLOOR_TEXT in markdown[0], markdown[0]
+
+
+# The tomllib gap is BELOW the floor but not the whole way down: 3.11 and
+# 3.12 are sub-floor yet still ship tomllib, so the ModuleNotFoundError
+# only fires on 3.9/3.10. A machine whose oldest interpreter is a 3.12
+# (this one: /usr/bin/python3 is 3.12.3) cannot reproduce the traceback
+# for real, and this test skips there, exactly as its neighbours do on a
+# box with no Python below the floor at all.
+NO_TOMLLIB_PYTHONS = [
+    entry
+    for entry in SUB_FLOOR_PYTHONS
+    if entry[0] < (3, 11, 0)
+]
+
+
+@pytest.mark.skipif(
+    not NO_TOMLLIB_PYTHONS,
+    reason="this machine has no Python below 3.11 (sub-floor without tomllib)",
+)
+@pytest.mark.parametrize(
+    "version, executable", NO_TOMLLIB_PYTHONS[:1], ids=lambda value: str(value)
+)
+def test_doctor_reports_tomllib_missing_on_a_real_sub_floor_interpreter(
+    version, executable, tmp_path
+):
+    # The config.toml half of the doctor story. The two tests above run
+    # with an empty HOME, so no config file exists and load_config() is
+    # never reached. With one present, _configured_browser() calls
+    # load_config(), whose function-local `import tomllib` is the only
+    # thing between doctor and a ModuleNotFoundError traceback on 3.9/
+    # 3.10. The ConfigError load_config() raises instead must land in
+    # cmd_doctor's existing `WARNING config:` handler: one more line in
+    # the report, never a crash.
+    home = tmp_path / "home"
+    (home / ".jimemo").mkdir()
+    (home / ".jimemo" / "config.toml").write_text(
+        '[pdf]\nbrowser = "chromium"\n', encoding="utf-8"
+    )
+    result = _fresh(
+        "from jimemo.cli import main\nraise SystemExit(main(['doctor']))\n",
+        executable=executable,
+        home=home,
+    )
+    assert result.returncode != 0, "doctor must fail below the floor"
+    assert "Traceback" not in result.stderr, result.stderr
+    first = result.stdout.splitlines()[0]
+    assert first.startswith("FAIL python "), result.stdout
+    assert ".".join(str(part) for part in version) in first, first
+    assert FLOOR_TEXT in first, first
+    warn = [
+        line for line in result.stdout.splitlines()
+        if line.startswith("WARNING config:")
+    ]
+    assert warn, result.stdout
+    assert "3.11" in warn[0], warn[0]

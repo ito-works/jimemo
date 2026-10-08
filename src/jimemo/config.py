@@ -110,9 +110,17 @@ def load_config(path: Optional[Path] = None) -> Config:
 
     # Function-local on purpose: jimemo must still import on an interpreter
     # below the floor so `jimemo doctor` can report the floor (tomllib is
-    # 3.11+). No vendor path is added first: tomllib is the standard
-    # library's, and config.py has no vendored dependency (jimemo#bgaw).
-    import tomllib
+    # 3.11+). The ConfigError below is what lets doctor finish its report
+    # on such an interpreter instead of dying in a traceback. No vendor
+    # path is added first: tomllib is the standard library's, and
+    # config.py has no vendored dependency (jimemo#bgaw).
+    try:
+        import tomllib
+    except ModuleNotFoundError:
+        raise ConfigError(
+            f"{cfg_path}: parsing config.toml needs Python 3.11 or newer "
+            f"(jimemo's floor is 3.13.6); this interpreter has no tomllib"
+        )
 
     try:
         data = tomllib.loads(cfg_path.read_text())
