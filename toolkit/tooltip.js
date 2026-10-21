@@ -78,6 +78,12 @@
     touch = e.pointerType === "touch" || e.pointerType === "pen";
   }
   doc.addEventListener("pointerdown", sense, true);
+  // A touch outside every tipped element closes the box. This rides on
+  // pointerdown, not click: iOS Safari delivers a tap on plain text to
+  // a document pointerdown listener but not to a document click one.
+  doc.addEventListener("pointerdown", function (e) {
+    if (touch && current && !tipOf(e.target)) hide();
+  }, true);
   doc.addEventListener("pointerover", sense, true);
   doc.addEventListener("pointermove", sense, true);
 
