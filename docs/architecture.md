@@ -48,8 +48,8 @@ contract in detail.
     toolkit CSS a template declares into one `<style>`, and turns local
     `<img src>` references into data URIs.
   - `lint.py` — `lint_html`: post-render static checks (no remote
-    fetches, no scripts unless the template declares charts, output
-    size). `lint_standalone` re-checks a file with no render context
+    fetches, no scripts unless the template declares charts or the
+    script is jimemo's own tooltip, output size). `lint_standalone` re-checks a file with no render context
     (the gate behind `check`, `pdf`, and `publish`). Refuses to import
     below `jimemo.PYTHON_FLOOR` (`_parser_floor.py`), which is the
     boundary a direct `from jimemo.lint import lint_html` caller crosses;
