@@ -109,6 +109,15 @@ third-party template cannot ride a chart declaration to embed its own
 JavaScript, and neither mode is a JavaScript judge: each recognizes
 renderer output and rejects everything else, fail closed.
 
+One more renderer-emitted body is allowed on ANY page, chart or
+chartless, in both modes: jimemo's tooltip script (toolkit/tooltip.js,
+read through tooltip.tooltip_js_text, the function render.py emits it
+with; jimemo#7h7c), byte-for-byte after the same whitespace strip, at
+most once per document -- a second copy is an error, counted across the
+<noscript> second reading too. A page with title attributes and no
+tooltip script, or with the script and no title, is fine; an edited copy
+is "unexpected" like any other script.
+
 In exact mode, five further completeness checks close a gap the body
 multiset alone leaves open: a page can contain exactly the renderer's
 script bodies and still fail to draw a chart. (1) Every matched script
@@ -173,6 +182,7 @@ from ._parser_floor import (
 from ._paths import CHARTJS_BUNDLE
 from .charts import chart_lib_inline_text, parse_chart_init_js
 from .errors import ContentError
+from .tooltip import tooltip_js_text
 from .sanitize import (
     browser_url_form,
     is_allowed_data_uri,
@@ -1138,6 +1148,11 @@ class _Linter(HTMLParser):
         self._canvas_seqs: Dict[str, int] = {}
         self._first_id: Dict[str, Tuple[str, int]] = {}
         self._chart_lib_cache: Any = _UNSET
+        # The tooltip script body (lazily read, like the Chart.js bundle)
+        # and how many copies of it this document has shown so far; both
+        # shared with a <noscript> second reading (_flush_noscript).
+        self._tooltip_cache: Any = _UNSET
+        self._tooltip_seen = 0
         # Containers whose contents a scripting-enabled browser keeps
         # out of the live DOM (see the module docstring). _containers is
         # a stack of the open elements that decide it: "svg" and "math"
@@ -1294,10 +1309,11 @@ class _Linter(HTMLParser):
             self._foreign_rcdata = tag
         if tag == "style":
             self._style_parts = []
-        elif tag == "script" and self.charts_declared:
+        elif tag == "script":
             # A src-bearing script (src present at all, any value)
             # already errored in _check_tag; only a true no-src inline
-            # body is buffered for the allowlist check.
+            # body is buffered for the allowlist check -- on every page,
+            # since the tooltip body is allowed on a chartless one too.
             if not _has_src_attr(attrs):
                 self._script_parts = []
                 self._script_type = _type_attr(attrs)
@@ -1305,7 +1321,7 @@ class _Linter(HTMLParser):
     def handle_startendtag(self, tag, attrs):
         self._check_tag(tag, attrs)  # a <style/> has no text to buffer
         self._open_container(tag, self_closing=True)
-        if tag == "script" and self.charts_declared:
+        if tag == "script":
             if not _has_src_attr(attrs):
                 # A body-less <script/> is nothing the renderer emits;
                 # judge its empty body so it fails closed like any other
@@ -1506,6 +1522,8 @@ class _Linter(HTMLParser):
         # Share the lazily read Chart.js bundle both ways, so a page of
         # many noscripts reads it once, not once per noscript.
         second._chart_lib_cache = self._chart_lib_cache
+        second._tooltip_cache = self._tooltip_cache
+        second._tooltip_seen = self._tooltip_seen
         second.feed("".join(parts))
         # The captured text ends at the first </noscript>, but a
         # scripting-disabled reader does not stop there when that text
@@ -1526,6 +1544,8 @@ class _Linter(HTMLParser):
             )
         second.close()
         self._chart_lib_cache = second._chart_lib_cache
+        self._tooltip_cache = second._tooltip_cache
+        self._tooltip_seen = second._tooltip_seen
         # Foreign content first opened inside the noscript counts for
         # the rest of the page too: a scripting-off reader can stay in
         # it past </noscript> (an ignored end tag, see _foreign_seen).
@@ -1549,10 +1569,23 @@ class _Linter(HTMLParser):
                 self._chart_lib_cache = None
         return self._chart_lib_cache
 
+    def _tooltip_js(self) -> Optional[str]:
+        """The tooltip script body exactly as render.py emits it
+        (tooltip_js_text), stripped, read lazily on the first inline
+        script judged; None if unreadable or unsafe to inline, in which
+        case no body matches it and the page's scripts are judged as
+        before."""
+        if self._tooltip_cache is _UNSET:
+            try:
+                self._tooltip_cache = tooltip_js_text().strip()
+            except (OSError, ContentError):
+                self._tooltip_cache = None
+        return self._tooltip_cache
+
     def _check_script_body(
         self, body: str, script_type: Any = _NO_TYPE
     ) -> None:
-        """Chart pages only. In exact mode (the render path,
+        """Every inline script body. On a chart page: in exact mode (the render path,
         _allowed_remaining set) a body is legal iff it is one of the
         bodies the renderer actually emitted for THIS page, each
         consumable once — string equality against render's own output,
@@ -1575,8 +1608,27 @@ class _Linter(HTMLParser):
         (see module docstring) — the byte-exact body a browser never
         runs. That still counts as "found" (it is consumed from
         _allowed_remaining) so the completeness error stands on its own
-        rather than piling a spurious "missing" on top of it."""
+        rather than piling a spurious "missing" on top of it.
+
+        Before any of that, on every page: the tooltip body is accepted
+        once per document (a second copy errors), and on a chartless
+        page every other body errors."""
         stripped = body.strip()
+        tooltip = self._tooltip_js()
+        if tooltip is not None and stripped == tooltip:
+            self._tooltip_seen += 1
+            if self._tooltip_seen > 1:
+                self.errors.append(
+                    "duplicate tooltip <script>: the renderer emits it "
+                    "at most once per page"
+                )
+            return
+        if not self.charts_declared:
+            self.errors.append(
+                "<script> tag found but this template declares no charts "
+                "(manifest 'charts' is empty)"
+            )
+            return
         if self._allowed_remaining is not None:
             remaining = self._allowed_remaining.get(stripped)
             if remaining:
@@ -1620,7 +1672,7 @@ class _Linter(HTMLParser):
                     f"{_shorten(stripped)!r} — the page's inline scripts "
                     "must be exactly the ones the renderer emitted (the "
                     "vendored Chart.js library and one built init per "
-                    "declared chart)"
+                    "declared chart, plus jimemo's tooltip script)"
                 )
             return
         lib = self._chart_lib()
@@ -1631,8 +1683,9 @@ class _Linter(HTMLParser):
             self.errors.append(
                 f"unexpected inline <script> on chart page: "
                 f"{_shorten(stripped)!r} — the only inline scripts "
-                "allowed are the vendored Chart.js library and one "
-                "renderer-built init per declared chart"
+                "allowed are the vendored Chart.js library, one "
+                "renderer-built init per declared chart, and jimemo's "
+                "tooltip script, unchanged"
             )
             return
         chart_id, config_json = parsed
@@ -1744,13 +1797,11 @@ class _Linter(HTMLParser):
                     f'<script src="{src if src is not None else ""}"> '
                     "is never allowed"
                 )
-            elif not self.charts_declared:
-                self.errors.append(
-                    "<script> tag found but this template declares no charts "
-                    "(manifest 'charts' is empty)"
-                )
-            # else: the ONE controlled opening in the no-script rule
-            # (charts): an inline, src-less <script> may pass
+            # Otherwise the body decides (_check_script_body, fed by the
+            # buffering in handle_starttag/handle_data): the tooltip body
+            # passes on any page; on a chartless page every other body
+            # errors there. The controlled opening for charts: an inline,
+            # src-less <script> may pass
             # when the manifest declares charts — but only if its BODY
             # is one the renderer emits: in exact mode, string-equal to
             # a body render_page actually built for this page; in the
