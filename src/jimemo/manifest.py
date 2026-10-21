@@ -16,8 +16,14 @@ SLOT_TYPES = ("text", "markdown", "data")
 # _chart_lib/_charts_context only populate these names when the
 # manifest declares at least one chart, but the reservation itself is
 # unconditional: whether a slot is *legal* does not depend on whether
-# this particular manifest happens to use charts).
-RESERVED_SLOT_NAMES = ("manifest", "styles", "theme", "charts", "chart_lib")
+# this particular manifest happens to use charts). "tooltip_js" and
+# "tooltip_css" are the same kind of name for the tooltip <script> and
+# <style> (render.py sets them only when content carries a title;
+# jimemo#7h7c).
+RESERVED_SLOT_NAMES = (
+    "manifest", "styles", "theme", "charts", "chart_lib",
+    "tooltip_js", "tooltip_css",
+)
 ITEM_TYPES = ("text", "markdown")
 # "scatter" is deliberately excluded: Chart.js scatter needs {x, y}
 # point objects on linear axes, but build_chart_config only ever emits

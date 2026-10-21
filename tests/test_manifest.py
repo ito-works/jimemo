@@ -141,7 +141,9 @@ def test_manifest_must_be_object(tmp_path):
         load_manifest(template_dir)
 
 
-@pytest.mark.parametrize("reserved", ["manifest", "styles", "theme"])
+@pytest.mark.parametrize(
+    "reserved", ["manifest", "styles", "theme", "tooltip_js", "tooltip_css"]
+)
 def test_reserved_slot_name_rejected(tmp_path, reserved):
     data = dict(VALID)
     data["slots"] = dict(VALID["slots"])

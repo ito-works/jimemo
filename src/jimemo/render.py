@@ -12,6 +12,12 @@ the exact bodies it emitted (library + every init), and lint requires
 the page's inline scripts to equal that set — nothing forged, extra,
 duplicated, or missing. A chartless manifest injects neither name,
 leaving chartless no-script output byte-identical.
+
+Tooltips: when a markdown slot carries an element with a non-empty
+``title``, the renderer injects ``tooltip_css`` and ``tooltip_js`` —
+jimemo's own fixed stylesheet and script from toolkit/ (tooltip.py) —
+and the page skeleton emits them once before ``</body>``. Content
+without a title injects neither, so its output is byte-identical.
 """
 import sys
 from html import escape
@@ -38,6 +44,7 @@ from .inline import (
 from .lint import lint_html
 from .manifest import load_manifest
 from .sanitize import SvgDrop, _svg_drop_label, sanitize_svg_with_report
+from .tooltip import content_has_title, tooltip_css_text, tooltip_js_text
 
 add_vendor_to_path()
 from jinja2 import (  # noqa: E402
@@ -639,6 +646,16 @@ def render_page(
         allowed_scripts = [str(context["chart_lib"])] + [
             str(chart["init_js"]) for chart in context["charts"]
         ]
+
+    # Tooltips (jimemo#7h7c): only when content carries a title, so a
+    # title-free page is byte-identical. Both are jimemo's fixed toolkit
+    # text, never content; lint accepts exactly this script body.
+    if content_has_title(content):
+        try:
+            context["tooltip_css"] = Markup(tooltip_css_text())
+            context["tooltip_js"] = Markup(tooltip_js_text())
+        except OSError as e:
+            raise ContentError(f"cannot read the tooltip toolkit files: {e}") from e
 
     try:
         html = template.render(**context)
