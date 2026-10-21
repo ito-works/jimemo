@@ -73,6 +73,17 @@ Write a content file as either:
 
 Only fill slots the manifest declares; required slots must be present.
 
+**Tooltips.** To show details on hover or tap (a perk's effect, an
+abbreviation, an item's stats), put a `title` on the element in a
+markdown slot: `<span title="Slows time for 8 s.">Sandevistan</span>`
+(also `abbr`, `b`, `i`, `strong`, `em`, `code`, `td`, `th`, `a`), or an
+image title, `![icon](mod.png "Mod: Neural Overclock")`. Use `&#10;` for
+a line break. The renderer then adds jimemo's own tooltip script: a
+small box in the page's colours beside the pointer, shown on hover and on
+tap, with dotted underlines marking tipped text. Do not write a
+`<script>` or `<style>` yourself; the sanitizer drops it and `jimemo
+check` refuses it.
+
 ### 4. Render
 
 ```

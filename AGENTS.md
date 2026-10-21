@@ -120,6 +120,16 @@ paragraphs and pass `jimemo render --figure NAME=file.svg`; either way the
 file is rebuilt by the SVG sanitizer and inlined, so theme tokens reach it.
 Patterns and copy-paste snippets: `docs/diagrams.md`.
 
+Tooltips: put a `title` on an element in a markdown slot --
+`<span title="...">name</span>` (or `abbr`, `b`, `i`, `strong`, `em`,
+`code`, `td`, `th`, `a`) or a markdown image title,
+`![alt](icon.png "...")`; `&#10;` (or a real newline) breaks a line. When
+any content slot carries one, the renderer appends jimemo's own tooltip
+`<style>` and `<script>` (`toolkit/tooltip.css`, `toolkit/tooltip.js`):
+one themed box shown beside the pointer on hover and on tap. `jimemo
+check` accepts that script byte-for-byte and still refuses every other
+inline script; a page without a title gets neither.
+
 ## Design systems are bring-your-own
 
 `import-design` reads tokens and font references from a folder (a

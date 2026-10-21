@@ -62,6 +62,11 @@ contract in detail.
     process is killed; `PdfError` on any failure.
   - `sanitize.py` — `sanitize_html`: stdlib allowlist sanitizer for
     markdown-rendered slot content (untrusted input may carry raw HTML).
+  - `tooltip.py` — `tooltip_js_text`/`tooltip_css_text`/`content_has_title`:
+    reads jimemo's fixed tooltip script and stylesheet from `toolkit/`
+    (refusing text that could close its element) and tells `render.py`
+    whether any markdown slot carries a `title`; `lint.py` accepts that
+    one script body through the same `tooltip_js_text`.
   - `charts.py` — `build_chart_config`/`serialize_chart_config`: builds
     a Chart.js config dict from a manifest chart declaration + the
     content's `{labels, series}` data slot, applying the dataviz
