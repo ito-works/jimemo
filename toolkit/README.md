@@ -19,7 +19,8 @@ always gets the light palette.
 | `base.css` | Reset, document defaults, `.jm-container`, `.jm-prose` typography, focus/selection, print rules. |
 | `components/<name>.css` | One file per component, loaded only when the template's manifest lists it. |
 | `macros.html.j2` | One macro per component. `{% import "macros.html.j2" as ui %}` |
-| `page.html.j2` | Base page skeleton templates extend: blocks `title`, `head_extra`, `content`, `footer`; the renderer injects the `<style>` tag through the `styles` variable. No JavaScript, except on pages whose manifest declares charts: the inlined Chart.js library and one renderer-built init script per chart. |
+| `page.html.j2` | Base page skeleton templates extend: blocks `title`, `head_extra`, `content`, `footer`; the renderer injects the `<style>` tag through the `styles` variable. No JavaScript, except on pages whose manifest declares charts: the inlined Chart.js library and one renderer-built init script per chart. The renderer also appends the tooltip below when content carries a `title`. |
+| `tooltip.js`, `tooltip.css` | The tooltip: one shared box for every element with a `title`, shown on hover and on tap. Fixed text, emitted by the renderer only when a markdown slot carries a `title`; `jimemo check` accepts this script byte-for-byte and no other. |
 
 ## Tokens
 

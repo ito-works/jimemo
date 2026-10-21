@@ -289,6 +289,20 @@ hand-written inline SVG colored with the page's `--jm-*` tokens (so
 light/dark mode keeps working), and re-run `jimemo check`. Patterns,
 pitfalls, and copy-paste snippets: [`docs/diagrams.md`](docs/diagrams.md).
 
+### Tooltips
+
+To give a name, a table cell or an image a hover/tap tooltip, put a
+`title` on it in a markdown slot: `<span title="Slows time for 8 s.">Sandevistan</span>`
+(also `abbr`, `b`, `i`, `strong`, `em`, `code`, `td`, `th`, `a`), or a
+markdown image title, `![icon](mod.png "Mod: Neural Overclock")`.
+Write `&#10;` in the title, or start a new line inside it, for a line
+break. When any content slot carries a title, the renderer adds jimemo's own small tooltip script and stylesheet: a
+box in the page's surface, text and accent colours that appears beside
+the pointer on hover and on tap on a phone, in place of the browser's
+slow native tooltip. Text underlined with dots marks a tooltip.
+`jimemo check` accepts that one script, unchanged; content cannot
+supply script or style of its own.
+
 ### Charts
 
 `chart-dashboard` renders a line and a bar
