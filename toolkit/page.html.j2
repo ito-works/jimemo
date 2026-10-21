@@ -18,9 +18,13 @@
                     emitted once below as the page's single library
                     <script>, in <head> so it runs before every chart
                     macro's init script
+        tooltip_css, tooltip_js — jimemo's own tooltip stylesheet and
+                    script (toolkit/tooltip.css, toolkit/tooltip.js),
+                    injected by the renderer ONLY when content carries a
+                    title; emitted once before </body>
 
-    No JavaScript, except charts: a chartless page emits no script at
-    all, and either way the output must render identically from a
+    No JavaScript, except charts and the tooltip: a page with neither
+    emits no script at all, and either way the output must render identically from a
     file:// double-click, an unlisted link, and a printer — vendored
     inline script only, never a fetch.
 -#}
@@ -40,6 +44,10 @@
 <main class="jm-container{% if wide|default(false) %} jm-container--wide{% endif %}">
 {% block content %}{% endblock %}
 </main>
-<footer class="jm-footer">{% block footer %}{% endblock %}</footer>
+<footer class="jm-footer">{% block footer %}{% endblock %}</footer>{% if tooltip_js|default(none) %}
+<style>
+{{ tooltip_css }}</style>
+<script>
+{{ tooltip_js }}</script>{% endif %}
 </body>
 </html>
