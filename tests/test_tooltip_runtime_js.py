@@ -75,7 +75,10 @@ process.stdin.on("end", () => {
     documentElement: root, body: bodyEl,
     createElement: tag => new El(tag),
     getElementById: id => root.all().find(e => e.attrs.id === id) || null,
-    addEventListener: (t, fn) => { docListeners[t] = fn; },
+    addEventListener: (t, fn) => {
+      if (t === "pointerdown") (docListeners[t] = docListeners[t] || []).push(fn);
+      else docListeners[t] = fn;
+    },
   };
   global.window = {addEventListener: (t, fn) => { winListeners[t] = fn; }};
   eval(body);
@@ -84,19 +87,24 @@ process.stdin.on("end", () => {
   const ev = (o) => Object.assign({preventDefault() { this.defaultPrevented = true; }}, o);
   for (const step of steps) {
     const [kind, ...a] = step;
-    if (kind === "pointer") docListeners.pointerdown(ev({pointerType: a[0]}));
+    if (kind === "pointer") {
+      const e = ev({pointerType: a[0], target: a[1] ? named[a[1]] : bodyEl});
+      for (const fn of docListeners.pointerdown) fn(e);
+    }
     else if (kind === "pointerover") docListeners.pointerover(ev({pointerType: a[0]}));
     else if (kind === "pointermove") docListeners.pointermove(ev({pointerType: a[0]}));
     else if (kind === "over") docListeners.mouseover(ev({target: named[a[0]], clientX: a[1], clientY: a[2]}));
     else if (kind === "move") docListeners.mousemove(ev({clientX: a[0], clientY: a[1]}));
     else if (kind === "out") docListeners.mouseout(ev({target: named[a[0]], relatedTarget: a[1] ? named[a[1]] : null}));
-    else if (kind === "click") {
+    else if (kind === "click" || kind === "iosclick") {
       const e = ev({target: named[a[0]], clientX: a[1], clientY: a[2], detail: a[3]});
-      // Bubble: element listeners from the target up, then the document.
+      // Bubble: element listeners from the target up, then the document
+      // -- except "iosclick", which models iOS Safari never delivering a
+      // tap on non-interactive content to the document listener.
       for (let el = e.target; el; el = el.parent) {
         for (const fn of el.listeners.click || []) fn(e);
       }
-      docListeners.click(e);
+      if (kind === "click") docListeners.click(e);
       out.prevented.push(!!e.defaultPrevented);
     }
     else if (kind === "key") docListeners.keydown(ev({key: a[0]}));
@@ -232,3 +240,36 @@ def test_tap_listener_is_on_each_tipped_element_and_acts_once():
     out = run([["pointer", "touch"], ["click", "inner", 5, 5, 1], ["snap"]])
     snap = out["snaps"][0]
     assert snap["hidden"] is False and snap["text"] == "inner"
+
+
+def test_ios_tap_reaches_the_tipped_element_listener():
+    # With no document delivery at all, the listener on the element itself
+    # must show the tip (removing the per-element listeners fails this).
+    out = run([["pointer", "touch", "span"], ["iosclick", "span", 10, 10, 1], ["snap"],
+               ["pointer", "touch", "span"], ["iosclick", "span", 10, 10, 1], ["snap"]])
+    shown, toggled = out["snaps"]
+    assert shown["hidden"] is False and shown["text"] == "one\ntwo"
+    assert toggled["hidden"] is True
+
+
+def test_ios_touch_elsewhere_closes_without_a_document_click():
+    out = run([
+        ["pointer", "touch", "span"], ["iosclick", "span", 10, 10, 1], ["snap"],
+        ["pointer", "touch", "plain"], ["iosclick", "plain", 50, 50, 1], ["snap"],
+    ])
+    shown, closed = out["snaps"]
+    assert shown["hidden"] is False
+    assert closed["hidden"] is True
+    assert "aria-describedby" not in closed["attrs"]["span"]
+
+
+def test_touch_down_on_a_tipped_element_does_not_close_first():
+    # pointerdown on another tipped element leaves the switch to its tap.
+    out = run([
+        ["pointer", "touch", "span"], ["iosclick", "span", 10, 10, 1],
+        ["pointer", "touch", "abbr"], ["snap"],
+        ["iosclick", "abbr", 20, 20, 1], ["snap"],
+    ])
+    down, switched = out["snaps"]
+    assert down["hidden"] is False and down["text"] == "one\ntwo"
+    assert switched["text"] == "Reflexes"
