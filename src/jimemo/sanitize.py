@@ -12,8 +12,14 @@ else. Pure stdlib (html.parser); no vendored dependency.
 Rules:
   * Tags outside ALLOWED_TAGS are unwrapped (tag dropped, children
     kept), except DISCARD_TAGS whose entire subtree is removed.
-  * Only ``a``, ``img``, ``th``/``td``, ``code`` keep any attributes at
-    all, per ALLOWED_ATTRS; ``style`` on table cells must be exactly the
+  * TITLE_ONLY_TAGS (``span``, ``abbr``, ``b``, ``i``) are kept only
+    when they carry a non-empty ``title`` (a tooltip), and then with
+    that attribute alone; without one they are unwrapped like any other
+    unknown tag, so title-free content is unchanged.
+  * Only ``a``, ``img``, ``th``/``td``, ``code``, ``strong``, ``em`` and
+    the title-only tags keep any attributes at all, per ALLOWED_ATTRS;
+    ``title`` carries no URL and runs nothing, and outside ``a``/``img``
+    an empty one is dropped; ``style`` on table cells must be exactly the
     text-align rule python-markdown emits for column alignment; ``class``
     on ``code`` must be exactly the ``language-*`` form the fenced_code
     extension emits.
@@ -29,7 +35,7 @@ Rules:
 import html
 import re
 from html.parser import HTMLParser
-from typing import List, NamedTuple, Optional, Tuple
+from typing import Dict, List, NamedTuple, Optional, Tuple
 from urllib.parse import urlsplit
 
 from ._parser_floor import (
@@ -66,6 +72,12 @@ DISCARD_TAGS = frozenset({
 
 VOID_TAGS = frozenset({"br", "hr", "img"})
 
+# Inline phrasing tags python-markdown never emits, kept only as the
+# carrier of a tooltip: an instance with a non-empty `title` survives
+# with that attribute alone, any other instance is unwrapped exactly as
+# a tag outside ALLOWED_TAGS is (jimemo#7h7c).
+TITLE_ONLY_TAGS = frozenset({"span", "abbr", "b", "i"})
+
 ALLOWED_ATTRS = {
     # `id` on <a> alone, so raw-HTML in-page anchors (<a id="x"></a>
     # plus a markdown [jump](#x)) have a target to scroll to. Carries
@@ -74,9 +86,17 @@ ALLOWED_ATTRS = {
     # other tag, and `name` is not added either.
     "a": frozenset({"href", "title", "id"}),
     "img": frozenset({"src", "alt", "title"}),
-    "th": frozenset({"align", "style"}),
-    "td": frozenset({"align", "style"}),
-    "code": frozenset({"class"}),
+    # `title` below is the tooltip text (jimemo#7h7c): the renderer adds
+    # its own tooltip script when content carries one (tooltip.py).
+    "th": frozenset({"align", "style", "title"}),
+    "td": frozenset({"align", "style", "title"}),
+    "code": frozenset({"class", "title"}),
+    "strong": frozenset({"title"}),
+    "em": frozenset({"title"}),
+    "span": frozenset({"title"}),
+    "abbr": frozenset({"title"}),
+    "b": frozenset({"title"}),
+    "i": frozenset({"title"}),
 }
 
 # The one style python-markdown's tables extension emits for column
@@ -284,6 +304,12 @@ def _url_allowed(value: str, *, allow_mailto: bool, allow_data_image: bool) -> b
     return False
 
 
+def _has_tooltip(attrs: List[Tuple[str, Optional[str]]]) -> bool:
+    """Whether a TITLE_ONLY_TAGS start tag carries a non-empty `title`
+    (the one attribute that keeps it)."""
+    return any(name.lower() == "title" and value for name, value in attrs)
+
+
 class _Sanitizer(HTMLParser):
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
@@ -292,6 +318,10 @@ class _Sanitizer(HTMLParser):
         # matching close tag at the recorded nesting depth.
         self._discard_tag: Optional[str] = None
         self._discard_depth = 0
+        # Per TITLE_ONLY_TAGS name, one entry per open instance: whether
+        # its start tag was kept, so the matching end tag is kept or
+        # dropped with it.
+        self._title_only: Dict[str, List[bool]] = {}
 
     # -- tag emission --------------------------------------------------
 
@@ -320,6 +350,9 @@ class _Sanitizer(HTMLParser):
             elif name == "style":  # only reachable on th/td
                 if not _TEXT_ALIGN_RE.match(value):
                     continue
+            elif name == "title" and tag not in ("a", "img"):
+                if not value:
+                    continue  # an empty tooltip shows nothing
             parts.append(' {0}="{1}"'.format(name, html.escape(value, quote=True)))
         parts.append(" />" if self_closing else ">")
         return "".join(parts)
@@ -335,12 +368,23 @@ class _Sanitizer(HTMLParser):
             self._discard_tag = tag
             self._discard_depth = 1
             return
+        if tag in TITLE_ONLY_TAGS:
+            kept = _has_tooltip(attrs)
+            self._title_only.setdefault(tag, []).append(kept)
+            if kept:
+                self.out.append(self._format_tag(tag, attrs, self_closing=False))
+            return
         if tag not in ALLOWED_TAGS:
             return  # unwrap: drop the tag, keep its children
         self.out.append(self._format_tag(tag, attrs, self_closing=tag in VOID_TAGS))
 
     def handle_startendtag(self, tag, attrs):
         if self._discard_tag is not None or tag in DISCARD_TAGS:
+            return
+        if tag in TITLE_ONLY_TAGS:
+            if _has_tooltip(attrs):
+                self.out.append(self._format_tag(tag, attrs, self_closing=False))
+                self.out.append("</{0}>".format(tag))
             return
         if tag not in ALLOWED_TAGS:
             return
@@ -356,6 +400,12 @@ class _Sanitizer(HTMLParser):
                 self._discard_depth -= 1
                 if self._discard_depth == 0:
                     self._discard_tag = None
+            return
+        if tag in TITLE_ONLY_TAGS:
+            open_ = self._title_only.get(tag)
+            # A stray end tag with nothing open is dropped.
+            if open_ and open_.pop():
+                self.out.append("</{0}>".format(tag))
             return
         if tag in ALLOWED_TAGS and tag not in VOID_TAGS:
             self.out.append("</{0}>".format(tag))

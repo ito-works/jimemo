@@ -84,6 +84,73 @@ def test_on_attributes_stripped_even_on_allowlisted_tags():
     assert out == '<td align="left">c</td>'
 
 
+# --- title: tooltip text on inline tags (jimemo#7h7c) ---
+
+TOOLTIP_TAGS = ("span", "abbr", "b", "strong", "em", "i", "code")
+
+
+@pytest.mark.parametrize("tag", TOOLTIP_TAGS)
+def test_title_kept_and_escaped_on_inline_tags(tag):
+    out = sanitize_html(f'<p><{tag} title="a &quot;b&quot; <c>">x</{tag}></p>')
+    assert out == f'<p><{tag} title="a &quot;b&quot; &lt;c&gt;">x</{tag}></p>'
+
+
+@pytest.mark.parametrize("tag", TOOLTIP_TAGS)
+def test_handlers_and_style_still_dropped_on_inline_tags(tag):
+    out = sanitize_html(
+        f'<p><{tag} title="t" onmouseover="alert(1)" style="color:red" '
+        f'class="x">x</{tag}></p>'
+    )
+    assert out == f'<p><{tag} title="t">x</{tag}></p>'
+
+
+@pytest.mark.parametrize("cell", ("td", "th"))
+def test_title_kept_on_table_cells_style_rule_unchanged(cell):
+    html = (
+        f'<table><tr><{cell} title="t" style="color:red" onclick="x()">a</{cell}>'
+        f'<{cell} style="text-align: right" title="u">b</{cell}></tr></table>'
+    )
+    assert sanitize_html(html) == (
+        f'<table><tr><{cell} title="t">a</{cell}>'
+        f'<{cell} style="text-align: right" title="u">b</{cell}></tr></table>'
+    )
+
+
+def test_title_still_kept_on_a_and_img():
+    out = sanitize_html('<a href="https://x.test" title="t">x</a><img src="a.png" alt="" title="u">')
+    assert out == '<a href="https://x.test" title="t">x</a><img src="a.png" alt="" title="u" />'
+
+
+@pytest.mark.parametrize("tag", ("span", "abbr", "b", "i"))
+def test_title_only_tags_unwrapped_without_a_title(tag):
+    assert sanitize_html(f"<p><{tag}>x</{tag}></p>") == "<p>x</p>"
+    assert sanitize_html(f'<p><{tag} title="">x</{tag}></p>') == "<p>x</p>"
+    assert sanitize_html(f"<p><{tag} title>x</{tag}></p>") == "<p>x</p>"
+    assert sanitize_html(f'<p><{tag} onclick="y">x</{tag}></p>') == "<p>x</p>"
+
+
+def test_empty_title_dropped_on_always_kept_tags():
+    assert sanitize_html('<p><strong title="">x</strong></p>') == "<p><strong>x</strong></p>"
+
+
+def test_title_only_nesting_keeps_end_tags_matched():
+    out = sanitize_html('<p><span title="a"><span>x</span><span title="b">y</span></span></p>')
+    assert out == '<p><span title="a">x<span title="b">y</span></span></p>'
+
+
+def test_title_only_stray_end_tag_dropped():
+    assert sanitize_html("<p>x</span></b></p>") == "<p>x</p>"
+
+
+def test_title_only_self_closing_kept_with_title():
+    assert sanitize_html('<p><span title="t"/>x</p>') == '<p><span title="t"></span>x</p>'
+    assert sanitize_html("<p><span/>x</p>") == "<p>x</p>"
+
+
+def test_title_only_tag_inside_discarded_subtree_is_gone():
+    assert sanitize_html('<p>a<script><span title="t">x</span></script>b</p>') == "<p>ab</p>"
+
+
 # --- <a> id: in-page anchor targets ---
 
 def test_a_id_kept_with_href_for_in_page_anchors():
