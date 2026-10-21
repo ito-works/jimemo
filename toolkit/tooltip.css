@@ -1,0 +1,33 @@
+/* jimemo tooltip (jimemo#7h7c): the box toolkit/tooltip.js shows, in the
+   page's own tokens so it follows light/dark and any theme. */
+.jm-tip {
+  position: fixed;
+  z-index: 1000;
+  left: 0;
+  top: 0;
+  max-width: min(22rem, calc(100vw - 8px));
+  padding: 0.45rem 0.65rem;
+  background: var(--jm-surface);
+  color: var(--jm-text);
+  border: 1px solid var(--jm-border);
+  border-left: 3px solid var(--jm-accent);
+  border-radius: 6px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
+  font-family: var(--jm-font-ui);
+  font-size: 0.8125rem;
+  line-height: 1.4;
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+  pointer-events: none;
+}
+.jm-tip[hidden] { display: none; }
+[data-tip] { cursor: help; }
+a[data-tip] { cursor: pointer; }
+span[data-tip], abbr[data-tip], b[data-tip], i[data-tip],
+strong[data-tip], em[data-tip], code[data-tip] {
+  text-decoration: underline dotted;
+  text-underline-offset: 0.15em;
+}
+@media print {
+  .jm-tip { display: none; }
+}
