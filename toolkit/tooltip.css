@@ -6,6 +6,8 @@
   left: 0;
   top: 0;
   max-width: min(22rem, calc(100vw - 8px));
+  max-height: calc(100vh - 8px);
+  overflow: hidden;
   padding: 0.45rem 0.65rem;
   background: var(--jm-surface);
   color: var(--jm-text);
@@ -27,6 +29,11 @@ span[data-tip], abbr[data-tip], b[data-tip], i[data-tip],
 strong[data-tip], em[data-tip], code[data-tip] {
   text-decoration: underline dotted;
   text-underline-offset: 0.15em;
+}
+/* Touch screens: a pointer cursor is also what makes iOS Safari treat a
+   tap on plain text as a click. */
+@media (hover: none) {
+  [data-tip] { cursor: pointer; }
 }
 @media print {
   .jm-tip { display: none; }

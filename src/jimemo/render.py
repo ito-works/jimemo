@@ -592,10 +592,10 @@ def render_page(
     appended to it, so a caller can refuse to write output over one.
 
     Raises ContentError if lint finds a hard error (any resource
-    reference outside lint's self-contained allowlist, script tags where
-    the manifest declares no charts, any <script src>, or a chart page
-    whose inline scripts are not exactly the ones this renderer emitted
-    for it — forged, extra, duplicated, or missing bodies all) — callers
+    reference outside lint's self-contained allowlist, script tags other
+    than the tooltip where the manifest declares no charts, any
+    <script src>, or a chart page whose inline scripts are not exactly
+    the ones this renderer emitted for it — forged, extra, duplicated, or missing bodies all) — callers
     must not write output in that case — and for chart data that is
     missing or does not fit the {labels, series} contract (see charts.py).
     """

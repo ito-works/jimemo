@@ -127,7 +127,8 @@ canvas are still Chart.js defaults and do not follow the theme.
   tables scroll inside `.jm-data-table__scroll`, never the page.
 - Nothing in the toolkit imports other stylesheets or references remote
   URLs, and the only script tags are a chart page's inlined Chart.js and
-  its renderer-built chart inits — pages render identically offline.
+  its renderer-built chart inits, and the tooltip script on a page whose
+  content carries a `title` — pages render identically offline.
 - Macros validate nothing. A template that passes them values from a
   schema-free `data` slot (for example `data_table` columns and rows,
   `tree` children, `entity_cards` tags and fields) passes whatever the

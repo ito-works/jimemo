@@ -34,8 +34,10 @@ process.stdin.on("end", () => {
       this.parent = null; this.children = []; this.style = {};
       this.hidden = false; this.textContent = "";
       this.offsetWidth = 100; this.offsetHeight = 40;
+      this.listeners = {};
       if (parent) parent.appendChild(this);
     }
+    addEventListener(t, fn) { (this.listeners[t] = this.listeners[t] || []).push(fn); }
     get id() { return this.attrs.id; }
     set id(v) { this.attrs.id = String(v); }
     set className(v) { this.attrs["class"] = v; }
@@ -66,6 +68,8 @@ process.stdin.on("end", () => {
     abbr: new El("abbr", {title: "Reflexes", "aria-describedby": "note"}, bodyEl),
     empty: new El("img", {title: ""}, bodyEl),
   };
+  named.outer = new El("span", {title: "outer"}, bodyEl);
+  named.inner = new El("b", {title: "inner"}, named.outer);
   const docListeners = {}, winListeners = {};
   global.document = {
     documentElement: root, body: bodyEl,
@@ -81,11 +85,17 @@ process.stdin.on("end", () => {
   for (const step of steps) {
     const [kind, ...a] = step;
     if (kind === "pointer") docListeners.pointerdown(ev({pointerType: a[0]}));
+    else if (kind === "pointerover") docListeners.pointerover(ev({pointerType: a[0]}));
+    else if (kind === "pointermove") docListeners.pointermove(ev({pointerType: a[0]}));
     else if (kind === "over") docListeners.mouseover(ev({target: named[a[0]], clientX: a[1], clientY: a[2]}));
     else if (kind === "move") docListeners.mousemove(ev({clientX: a[0], clientY: a[1]}));
     else if (kind === "out") docListeners.mouseout(ev({target: named[a[0]], relatedTarget: a[1] ? named[a[1]] : null}));
     else if (kind === "click") {
       const e = ev({target: named[a[0]], clientX: a[1], clientY: a[2], detail: a[3]});
+      // Bubble: element listeners from the target up, then the document.
+      for (let el = e.target; el; el = el.parent) {
+        for (const fn of el.listeners.click || []) fn(e);
+      }
       docListeners.click(e);
       out.prevented.push(!!e.defaultPrevented);
     }
@@ -201,3 +211,24 @@ def test_escape_and_scroll_hide(dismiss):
     snap = out["snaps"][0]
     assert snap["hidden"] is True
     assert "aria-describedby" not in snap["attrs"]["span"]
+
+
+def test_hover_resumes_after_a_tap_on_a_hybrid_device():
+    out = run([
+        ["pointer", "touch"], ["click", "span", 10, 10, 1], ["click", "plain", 50, 50, 1],
+        # The mouse moves next: pointerover/pointermove precede mouseover.
+        ["pointerover", "mouse"], ["over", "abbr", 20, 20], ["snap"],
+        ["pointermove", "mouse"], ["move", 30, 30], ["snap"],
+    ])
+    hovered, moved = out["snaps"]
+    assert hovered["hidden"] is False and hovered["text"] == "Reflexes"
+    assert (moved["left"], moved["top"]) == ("42px", "42px")
+
+
+def test_tap_listener_is_on_each_tipped_element_and_acts_once():
+    # A nested tipped element: inner, outer and document listeners all see
+    # the tap; only the first acts, so the tip shows rather than toggling
+    # off again.
+    out = run([["pointer", "touch"], ["click", "inner", 5, 5, 1], ["snap"]])
+    snap = out["snaps"][0]
+    assert snap["hidden"] is False and snap["text"] == "inner"

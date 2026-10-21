@@ -74,8 +74,9 @@ still inside one. A ``<noscript>``'s second reading applies the same rule.
 
 Separate from the fetch allowlist, execution checks remain: ``on*``
 attributes and ``javascript:``/``vbscript:`` URLs are never allowed
-anywhere, ``<script src>`` is never allowed, ``<script>`` requires the
-manifest to declare charts, ``<meta http-equiv="refresh">`` (a
+anywhere, ``<script src>`` (or an SVG ``<script href>``) is never
+allowed, any other ``<script>`` requires the manifest to declare charts
+unless its body is jimemo's tooltip script (see below), ``<meta http-equiv="refresh">`` (a
 navigation at view time) is never allowed, and ``<base href>`` (which
 re-roots every relative URL) is never allowed. ``<canvas>`` is not
 restricted: without script it is an inert blank box, and the script
@@ -994,8 +995,28 @@ def _has_src_attr(attrs: List[Tuple[str, Optional[str]]]) -> bool:
     element's inline body and fetches src instead, so presence, not
     value, must gate every no-src/has-src decision on a <script> tag;
     testing the value would let a valueless src slip through as if the
-    tag had none."""
-    return any(name.lower() == "src" for name, _value in attrs)
+    tag had none.
+
+    An SVG ``<script>`` fetches and runs ``href`` or ``xlink:href`` the
+    same way (jimemo#7h7c review), so those count as a src here too: a
+    script carrying any of the three is never an inline body."""
+    return _script_fetch_attr(attrs) is not None
+
+
+# The attributes that make a <script> fetch its code: `src`, and in SVG
+# `href` / `xlink:href`.
+_SCRIPT_FETCH_ATTRS = ("src", "href", "xlink:href")
+
+
+def _script_fetch_attr(
+    attrs: List[Tuple[str, Optional[str]]]
+) -> Optional[Tuple[str, Optional[str]]]:
+    """The first fetch-bearing attribute of a <script> as ``(name,
+    value)``, or None; see _has_src_attr."""
+    for name, value in attrs:
+        if name.lower() in _SCRIPT_FETCH_ATTRS:
+            return name.lower(), value
+    return None
 
 
 # Sentinel: the <script> start tag carries no `type` attribute at all
@@ -1792,16 +1813,18 @@ class _Linter(HTMLParser):
                 # its script inline instead.) Presence is what counts —
                 # not the value — so this reports the raw value only
                 # for display, defaulting to "" when there is none.
-                src = next((v for n, v in attrs if n.lower() == "src"), None)
+                name, src = _script_fetch_attr(attrs)
                 self.errors.append(
-                    f'<script src="{src if src is not None else ""}"> '
+                    f'<script {name}="{src if src is not None else ""}"> '
                     "is never allowed"
                 )
             # Otherwise the body decides (_check_script_body, fed by the
-            # buffering in handle_starttag/handle_data): the tooltip body
-            # passes on any page; on a chartless page every other body
-            # errors there. The controlled opening for charts: an inline,
-            # src-less <script> may pass
+            # buffering in handle_starttag/handle_data). jimemo's tooltip
+            # body passes on any page; on a chartless page every other
+            # body errors there.
+            #
+            # On a chart page this is the controlled opening in the
+            # no-script rule: an inline, src-less <script> may pass
             # when the manifest declares charts — but only if its BODY
             # is one the renderer emits: in exact mode, string-equal to
             # a body render_page actually built for this page; in the

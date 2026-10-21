@@ -9,15 +9,15 @@
   var doc = document;
   var root = doc.documentElement;
   var els = doc.body.querySelectorAll("[title]");
-  var any = false;
+  var tipped = [];
   for (var i = 0; i < els.length; i++) {
     var t = els[i].getAttribute("title");
     if (!t) continue;
     els[i].setAttribute("data-tip", t);
     els[i].removeAttribute("title");
-    any = true;
+    tipped.push(els[i]);
   }
-  if (!any) return;
+  if (!tipped.length) return;
 
   var id = "jm-tip";
   for (var n = 2; doc.getElementById(id); n++) id = "jm-tip-" + n;
@@ -67,17 +67,23 @@
     tip.hidden = true;
   }
 
-  function tipped(target) {
+  function tipOf(target) {
     return target && target.closest ? target.closest("[data-tip]") : null;
   }
 
-  doc.addEventListener("pointerdown", function (e) {
+  // The input in use, from every pointer event (each precedes the mouse
+  // event it causes), so a hybrid device switches back to hover the
+  // moment the mouse moves after a tap.
+  function sense(e) {
     touch = e.pointerType === "touch" || e.pointerType === "pen";
-  }, true);
+  }
+  doc.addEventListener("pointerdown", sense, true);
+  doc.addEventListener("pointerover", sense, true);
+  doc.addEventListener("pointermove", sense, true);
 
   doc.addEventListener("mouseover", function (e) {
     if (touch) return;
-    var el = tipped(e.target);
+    var el = tipOf(e.target);
     if (el) show(el, e.clientX, e.clientY);
     else hide();
   });
@@ -90,9 +96,16 @@
     if (!to || !current.contains(to)) hide();
   });
 
-  doc.addEventListener("click", function (e) {
+  // Taps. The listener sits on each tipped element as well as on the
+  // document: iOS Safari does not deliver a tap on a non-interactive
+  // element to a document listener, but does deliver it to one on the
+  // element itself. `jmTipHandled` keeps nested tipped elements and the
+  // document listener from acting on the same tap twice.
+  function tap(e) {
+    if (e.jmTipHandled) return;
+    e.jmTipHandled = true;
     if (!touch || e.detail === 0) return;
-    var el = tipped(e.target);
+    var el = tipOf(e.target);
     if (!el) { hide(); return; }
     if (el === current) {
       if (!el.closest("a[href]")) hide();
@@ -100,7 +113,9 @@
     }
     if (el.closest("a[href]")) e.preventDefault();
     show(el, e.clientX, e.clientY);
-  });
+  }
+  for (var k = 0; k < tipped.length; k++) tipped[k].addEventListener("click", tap);
+  doc.addEventListener("click", tap);
 
   doc.addEventListener("keydown", function (e) {
     if (e.key === "Escape") hide();

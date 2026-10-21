@@ -54,6 +54,8 @@ def test_tooltip_css_uses_page_tokens_and_pre_line():
     for token in ("--jm-surface", "--jm-text", "--jm-accent", "--jm-border", "--jm-font-ui"):
         assert f"var({token})" in css
     assert "white-space: pre-line" in css
+    # A tall title is cut at the viewport rather than running off it.
+    assert "max-height: calc(100vh - 8px)" in css and "overflow: hidden" in css
     assert "url(" not in css and "@import" not in css
 
 
@@ -217,3 +219,15 @@ def test_tooltip_body_does_not_bless_a_src_script():
     html = f'<html><body><script src="x.js">{JS}</script></body></html>'
     errors, _ = lint_html(html, {"charts": []})
     assert errors == ['<script src="x.js"> is never allowed']
+
+
+@pytest.mark.parametrize("attr", ("href", "xlink:href"))
+@pytest.mark.parametrize("url", ("https://evil.example/x.js", "data:text/javascript,alert(1)"))
+def test_tooltip_body_does_not_bless_an_svg_script_href(attr, url):
+    # An SVG <script> fetches and runs href/xlink:href like src.
+    html = (
+        f'<html><body><svg><script {attr}="{url}">{JS}</script></svg>'
+        "</body></html>"
+    )
+    for errors in (lint_html(html, {"charts": []})[0], lint_standalone(html)[0]):
+        assert any(f"<script {attr}=" in e and "never allowed" in e for e in errors), errors
