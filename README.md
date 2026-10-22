@@ -589,7 +589,7 @@ for you after review — the PR itself is all you need to do. See
 ### Landing changes: `main` is repoman-managed (maintainers)
 
 This repo's `main` has one writer — repoman, formerly the merge-marshal (see
-`.repoman-managed`; the old `.marshal-managed` marker stays until 2026-09-28). Finished work is pushed as a branch and handed off:
+`.repoman-managed`). Finished work is pushed as a branch and handed off:
 
 ```
 git push -u origin <branch>

@@ -91,14 +91,14 @@ class RealFailure(unittest.TestCase):
     def test_comment_matches_the_board_parsers(self):
         import re
         body = g.bounce_comment(ATT, "check `gate` failed")
-        # marshalboard/snapshot.py:734-741
+        # marshalboard/snapshot.py REPOMAN_COMMENT_PREFIXES
         prefixes = ("repoman bounced (attempt", "repoman blocked (attempt",
                     "repoman blocked:")
         self.assertTrue(body.startswith(prefixes))
-        # marshalboard/snapshot.py:3044
+        # marshalboard/snapshot.py _BOUNCED_ATTEMPT_RE
         m = re.search(r"\(attempt ([^)\s]+)\)", body)
         self.assertEqual(m.group(1), ATT)
-        # snapshot.py:3056-3062 splits the reason on the first ": "
+        # snapshot.py bounce_reason() splits the reason on the first ": "
         self.assertEqual(body.partition(": ")[2], "check `gate` failed")
 
     def test_detail_lines_are_prefixed_so_a_marker_cannot_be_forged(self):

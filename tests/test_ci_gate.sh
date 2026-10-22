@@ -269,8 +269,8 @@ check "no marker at all does not activate the lane" "$?"
 
 d="$WORK/lane_marshal"; mkdir -p "$d"
 printf 'lane: pr-queue\n' > "$d/.marshal-managed"
-"$LANE_GUARD" "$d" 2>&1 | grep -q "active=true"
-check "the pre-rename .marshal-managed marker is honoured too" "$?"
+"$LANE_GUARD" "$d" 2>&1 | grep -q "active=false"
+check "a lone pre-rename .marshal-managed is no longer a marker" "$?"
 
 d="$WORK/lane_ws"; mkdir -p "$d"
 printf '  lane: pr-queue  \r\n' > "$d/.repoman-managed"

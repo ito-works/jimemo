@@ -8,8 +8,7 @@
 # repository's own marker says the lane is live.
 #
 # The marker is the same file that already decides whether a repo is managed at
-# all (.repoman-managed, or .marshal-managed until 2026-09-28). Its FIRST LINE
-# carries the lane:
+# all (.repoman-managed). Its FIRST LINE carries the lane:
 #
 #     lane: pr-queue     → this lane is live
 #     lane: repoman      → the old lane; skip
@@ -40,7 +39,7 @@ repo_root="${1:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)}"
 lane=""
 read_lane() { # $1 = a `git show`-able prefix, or empty for the working tree
     local at="$1" f raw
-    for f in .repoman-managed .marshal-managed; do
+    for f in .repoman-managed; do
         if [ -n "$at" ]; then
             # Read the whole blob, THEN take its first line. `git show | head`
             # closes the pipe early, and under pipefail a SIGPIPE'd git would
