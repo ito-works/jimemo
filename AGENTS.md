@@ -153,9 +153,9 @@ walkthrough.
 
 ## Landing changes: main is repoman-managed
 
-This repo carries a `.repoman-managed` marker at its root, which means one integrator
-("repoman", formerly the merge marshal) is the only actor that pushes to `main`. Do not
-merge to `main` and do not push to it. Finish your branch, push it, and hand
+This repo carries a `.repoman-managed` marker at its root, which means one
+integrator ("repoman", formerly the merge marshal) is the only actor that
+pushes to `main`. Do not merge to `main` and do not push to it. Finish your branch, push it, and hand
 it off:
 
 ```
@@ -170,4 +170,5 @@ with a scrubbed failure comment; fix it, push again, and re-run
 
 `repoman-submit` lives in the cell-fleet repo at
 `ops/repoman/bin/repoman-submit`. The marker file is the check: if
-`.repoman-managed` is not present at a repo's root, that repo is unmanaged and normal merging applies.
+`.repoman-managed` is not present at a repo's root, that repo is unmanaged and
+normal merging applies.
