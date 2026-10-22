@@ -10,7 +10,7 @@ their branch is broken when it is not — so the decision is a pure function wit
 a test per row.
 
 Comment text is byte-compatible with the parsers that already read it:
-marshalboard/snapshot.py:734-741 (MARSHAL_COMMENT_PREFIXES) and :3044
+marshalboard/snapshot.py REPOMAN_COMMENT_PREFIXES and _BOUNCED_ATTEMPT_RE
 (the `\\(attempt ([^)\\s]+)\\)` regex).
 """
 
