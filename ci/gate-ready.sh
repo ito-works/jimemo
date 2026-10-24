@@ -3,16 +3,17 @@
 #
 # Named in gate.yml's RUN_GATE_PREFLIGHT next to python3. The wrapper's own
 # python3 probe only asks whether an interpreter STARTS (ci/run-gate.sh, the
-# preflight loop), and the runner host's bare PATH carries a /usr/bin/python3
-# that starts fine, is 3.9, and has no pytest: if Homebrew's python3 ever
-# went missing, that one would answer the probe and `python3 -m pytest` would
-# then exit 1 — a producer bounced for a broken runner, which jp90 forbids.
+# preflight loop). gate.yml runs on GitHub-hosted ubuntu-latest, whose image
+# python3 starts fine, is below jimemo's floor, and has no pytest: if the
+# setup-python step or the pytest install went wrong, that one would answer
+# the probe and `python3 -m pytest` would then exit 1 — a producer bounced for
+# a broken runner, which jp90 forbids.
 # This asks the question the gate actually needs answered — a final release at
 # or above jimemo's floor, with pytest importable — in the gate's own
 # environment, and a "no" becomes a deferral. run-gate.sh calls it as
 # `ci/gate-ready.sh --version`; the argument is ignored.
 #
-# Exit 0 = ready; anything else = the gate could not run on this host.
+# Exit 0 = ready; anything else = the gate could not run on this runner.
 python3 - <<'PY'
 import sys
 floor = (3, 13, 6)
