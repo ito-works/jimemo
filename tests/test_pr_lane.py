@@ -83,3 +83,14 @@ def test_gate_ready_refuses_a_python_without_pytest(tmp_path):
         % sys.executable)
     assert proc.returncode != 0
     assert "has no pytest" in proc.stderr
+
+
+def test_gate_ready_describes_the_hosted_runner():
+    # gate.yml runs on GitHub-hosted ubuntu-latest (jimemo#twvr). The header
+    # once described the self-hosted Mac runner -- its bare PATH, Homebrew's
+    # python3, a 3.9 /usr/bin/python3 -- and none of that applies now
+    # (jimemo#n5tz item 3).
+    header = (REPO / "ci" / "gate-ready.sh").read_text()
+    for stale in ("runner host", "Homebrew", "is 3.9", "mujin-gate"):
+        assert stale not in header, stale
+    assert "setup-python" in header
