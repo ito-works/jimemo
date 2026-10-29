@@ -514,7 +514,7 @@ authority on hosting, hashing, and storage.
 
 For someone with nowhere to publish to yet: `jimemo publish setup` walks
 through provisioning a free Cloudflare Pages project and KV namespace.
-It needs Node (wrangler runs through `npx wrangler`), curl >= 8.3 (one
+It needs Node and a Wrangler version you choose and install, curl >= 8.3 (one
 project-config call per deploy that wrangler cannot make: it confirms the
 Pages project is fail-closed, so a Functions outage never serves purged
 pages), and a Cloudflare API token scoped to `Pages: Edit` + `Workers KV
@@ -523,7 +523,12 @@ of one-time steps (creating the KV namespace, binding it to the Pages
 project as `TOMBSTONES`) have no wrangler CLI equivalent, so the wizard
 prints the exact manual command or dashboard step instead of faking
 automation of it. See [`docs/publish-setup.md`](docs/publish-setup.md)
-for the full walkthrough — including publishing from several machines,
+for the full walkthrough. Jimemo runs `wrangler` on PATH directly;
+`JIMEMO_WRANGLER=/path/to/wrangler` selects an executable or wrapper
+instead. It never downloads Wrangler through bare `npx`, so choose and
+review a version before installing it (for example,
+`npm install --global wrangler@4.153.0`). The walkthrough also covers
+publishing from several machines,
 where making the state directory a git repo turns on automatic
 syncing — dirty-tree refusal, pull, then commit + push before every
 deploy (the same model notes.ito.com uses); `--no-sync` skips it for

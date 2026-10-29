@@ -193,7 +193,7 @@ def test_dry_run_prints_the_deploy_argv(tmp_path):
     # (.git/, .DS_Store) that live there. See _build_deploy_dir's
     # docstring.
     assert (
-        f"npx wrangler pages deploy {state_dir} "
+        f"wrangler pages deploy {state_dir} "
         f"--project-name {DEFAULT_PROJECT_NAME} --branch main"
     ) not in text
     # Instead it must describe the allowlisted-copy deploy accurately.
@@ -203,7 +203,7 @@ def test_dry_run_prints_the_deploy_argv(tmp_path):
     # Any wrangler command shown is against a placeholder, never a raw,
     # copy-pasteable path.
     assert (
-        f"npx wrangler pages deploy <allowlisted-copy> "
+        f"wrangler pages deploy '<allowlisted-copy>' "
         f"--project-name {DEFAULT_PROJECT_NAME} --branch main"
     ) in text
     # And NOT the repo's own template dir -- that's the source it installs
@@ -253,8 +253,8 @@ def test_dry_run_prints_the_kv_check_argv(tmp_path):
     run_setup(True, MockWrangler(), tmp_path / "config.toml", io)
 
     text = io.text()
-    assert "npx wrangler kv key put __jimemo_setup_check__ ok" in text
-    assert "npx wrangler kv key get __jimemo_setup_check__" in text
+    assert "wrangler kv key put __jimemo_setup_check__ ok" in text
+    assert "wrangler kv key get __jimemo_setup_check__" in text
 
 
 def test_dry_run_kv_binding_step_names_tombstones(tmp_path):
@@ -541,7 +541,7 @@ def test_missing_token_writes_no_config(tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Missing npx/wrangler (non-dry-run): clear error, no side effects.
+# Missing Wrangler (non-dry-run): clear error, no side effects.
 # ---------------------------------------------------------------------------
 
 def test_missing_wrangler_raises_clear_error(tmp_path, monkeypatch):
@@ -817,7 +817,7 @@ def test_kv_create_is_a_standout_user_run_command(tmp_path, monkeypatch):
 
     text = io.text()
     assert (
-        "      $ npx wrangler kv namespace create friend-notes-tombstones"
+        "      $ wrangler kv namespace create friend-notes-tombstones"
         in text.splitlines()
     )
     assert "separate terminal" in text
@@ -829,7 +829,7 @@ def test_dry_run_kv_create_is_a_standout_user_run_command(tmp_path):
     run_setup(True, MockWrangler(), tmp_path / "config.toml", io)
 
     assert (
-        f"      $ npx wrangler kv namespace create "
+        f"      $ wrangler kv namespace create "
         f"{DEFAULT_PROJECT_NAME}-tombstones"
         in io.text().splitlines()
     )
@@ -853,7 +853,7 @@ def test_wizards_own_wrangler_calls_never_carry_the_dollar_marker(
     wrangler, io, cfg_path = _run_real(tmp_path, monkeypatch)
 
     text = io.text()
-    assert "  running: npx wrangler pages deploy" in text
+    assert "  running: wrangler pages deploy" in text
     for line in text.splitlines():
         if "running:" in line or "would run:" in line:
             assert not line.lstrip().startswith("$")
@@ -995,3 +995,25 @@ def test_project_create_dry_run_matches_rest_seam():
             "POST", "", Wrangler.pages_project_create_body("my-project")
         )
     )
+
+
+@pytest.mark.parametrize("dry_run", [False, True])
+def test_setup_prints_the_selected_wrangler(tmp_path, monkeypatch, dry_run):
+    import shlex
+
+    executable = "/chosen tools/reviewed-wrangler"
+    wrangler = MockWrangler(executable=executable)
+    if dry_run:
+        io = FakeIO()
+        run_setup(True, wrangler, tmp_path / "config.toml", io)
+        assert wrangler.calls == []
+    else:
+        _, io, _ = _run_real(tmp_path, monkeypatch, wrangler=wrangler)
+    text = io.text()
+    commands = ["pages deploy", "kv namespace create",
+                "kv key put", "kv key get"]
+    if dry_run:
+        commands.append("pages project list")
+    for args in commands:
+        assert f"{shlex.quote(executable)} {args}" in text
+    assert "npx wrangler" not in text

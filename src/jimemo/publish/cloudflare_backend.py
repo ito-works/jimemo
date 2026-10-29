@@ -1,6 +1,6 @@
 """The "cloudflare" publish backend: native Cloudflare Pages + KV, driven
 entirely through the Wrangler seam (wrangler.py); the seam itself shells
-out to ``npx wrangler`` and, for the one Pages setting wrangler cannot
+out to the selected ``wrangler`` and, for the one Pages setting wrangler cannot
 reach (fail_open), to ``curl``.
 This is the backend the `jimemo publish setup` wizard provisions for
 a friend who doesn't already have a publish site of their own (unlike
