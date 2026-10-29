@@ -137,6 +137,8 @@ automatically, mirroring notes.ito.com's model and ordering:
      copy of the repo's `publish/cloudflare/` template (see "Single-
      machine limitation" above for why this directory matters),
    - deploy that directory to the Pages project,
+   - require the production deployment to report `uses_functions: true`
+     through the Pages API (also checked after every publish/gc deploy),
    - run a best-effort KV round-trip check,
    - write `~/.jimemo/config.toml` (no token in it -- see below).
 
@@ -164,7 +166,9 @@ automatically, mirroring notes.ito.com's model and ordering:
    # -> expect 404
    ```
 
-   A `200` instead of `404` after purging means the `TOMBSTONES` KV
+   The deployment metadata check confirms a Functions bundle was deployed;
+   this live test is still needed to verify the binding. A `200` instead
+   of `404` after purging can mean the `TOMBSTONES` KV
    binding is missing or misnamed in the Pages project's dashboard
    settings -- go back and re-check step 4's binding step. Cloudflare
    KV's read-cache means a 404 may take up to ~60 seconds to appear
@@ -207,7 +211,8 @@ No token is ever written here. `CLOUDFLARE_API_TOKEN` must stay exported in
 your shell environment. Every `jimemo publish` subcommand shells out to
 `wrangler`; the deploying ones (`publish`, `gc`, and `setup` including
 `--assets-only`) additionally have `curl` read the Pages project's fail-open
-flags straight from that same variable before deploying (curl expands it
+flags before deploying and confirm the production deployment reports
+`uses_functions: true` afterwards, using that same variable (curl expands it
 itself; jimemo never reads the value). A `wrangler login` credential store
 alone is not enough for that check, so those refuse without the variable --
 plain `setup` needs it too, since it sets `fail_open=false` through the same

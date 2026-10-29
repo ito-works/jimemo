@@ -19,11 +19,13 @@ class FakeRunner:
     def __init__(self, *results):
         self.calls = []
         self.envs = []
+        self.cwds = []
         self._results = list(results)
 
-    def __call__(self, argv, env=None):
+    def __call__(self, argv, env=None, *, cwd=None):
         self.calls.append(argv)
         self.envs.append(env)
+        self.cwds.append(cwd)
         if len(self._results) == 1:
             return self._results[0]
         return self._results.pop(0)
@@ -32,7 +34,7 @@ class FakeRunner:
 class RaisingRunner:
     """Simulates `npx` itself being absent from PATH."""
 
-    def __call__(self, argv, env=None):
+    def __call__(self, argv, env=None, *, cwd=None):
         raise FileNotFoundError("npx: command not found")
 
 
@@ -517,7 +519,7 @@ class PermissionRunner:
     wrong architecture, ...): process start raises an OSError that is
     NOT FileNotFoundError."""
 
-    def __call__(self, argv, env=None):
+    def __call__(self, argv, env=None, *, cwd=None):
         raise PermissionError(13, "Permission denied", "curl")
 
 
@@ -579,3 +581,57 @@ def test_other_error_codes_get_no_token_hint(monkeypatch):
         w.pages_project_fail_open("friend-notes")
     assert TOKEN_HINT not in str(exc.value)
     assert "8000007" in str(exc.value)
+
+
+@pytest.mark.parametrize("relative", [False, True])
+def test_deploy_discovers_functions_from_deploy_directory(tmp_path, monkeypatch, relative):
+    """A mock executable models Wrangler's cwd-relative Functions discovery."""
+    caller = tmp_path / "caller"
+    caller.mkdir()
+    deploy = caller / "deploy dir"
+    (deploy / "functions").mkdir(parents=True)
+    (deploy / "functions" / "_middleware.js").write_text("tombstone middleware")
+    executable = tmp_path / "mock-wrangler"
+    executable.write_text(
+        f"#!{sys.executable}\n"
+        "import json, sys\n"
+        "from pathlib import Path\n"
+        "print(json.dumps({'cwd': str(Path.cwd()), 'args': sys.argv[1:],\n"
+        " 'middleware': Path('functions/_middleware.js').read_text()}))\n"
+    )
+    executable.chmod(0o755)
+    monkeypatch.chdir(caller)
+
+    from jimemo.publish.wrangler import _run
+
+    def runner(argv, env=None, *, cwd=None):
+        # Keep this cwd regression independent of how Wrangler is selected.
+        return _run([str(executable), *argv[argv.index("pages"):]], env, cwd=cwd)
+
+    result = Wrangler(runner=runner).pages_deploy(
+        "my-project", deploy.relative_to(caller) if relative else deploy
+    )
+
+    output = json.loads(result.stdout)
+    assert output["cwd"] == str(deploy)
+    assert output["middleware"] == "tombstone middleware"
+    assert output["args"] == ["pages", "deploy", str(deploy),
+                              "--project-name", "my-project", "--branch", "main"]
+    assert Path.cwd() == caller
+
+
+@pytest.mark.parametrize("deployment", [None, {}, {"uses_functions": False},
+                                         {"uses_functions": "true"}, {"uses_functions": 1}])
+def test_functions_check_refuses_unconfirmed_bundle(monkeypatch, deployment):
+    response = json.dumps({"success": True, "result": {"canonical_deployment": deployment}})
+    w, runner = _wrangler_with_token(monkeypatch, _ok(response))
+    with pytest.raises(PublishError, match="uses_functions=true"):
+        w.pages_project_require_functions("friend-notes")
+    assert runner.calls[0][-1] == PROJECT_URL
+
+
+def test_functions_check_accepts_confirmed_production_bundle(monkeypatch):
+    response = json.dumps({"success": True, "result": {
+        "canonical_deployment": {"uses_functions": True}}})
+    w, _ = _wrangler_with_token(monkeypatch, _ok(response))
+    w.pages_project_require_functions("friend-notes")

@@ -287,6 +287,7 @@ class CloudflarePublisher(Publisher):
         with tempfile.TemporaryDirectory(prefix="jimemo-deploy-") as tmp:
             deploy_dir = _build_deploy_dir(self._state_dir, Path(tmp))
             self._wrangler.pages_deploy(self._cf.project, deploy_dir)
+            self._wrangler.pages_project_require_functions(self._cf.project)
 
     def publish(self, html_path: Path, title: Optional[str] = None) -> str:
         """Stage html_path as a new hash directory and redeploy the whole
