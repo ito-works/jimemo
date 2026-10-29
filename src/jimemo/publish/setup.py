@@ -641,6 +641,7 @@ def run_setup(dry_run: bool, wrangler, config_path: Path, io: SetupIO,
             "other synced strays excluded) via: "
             f"{_deploy_argv(project, '<allowlisted-copy>')}"
         )
+        io.print("  [dry-run] would require the production deployment to report uses_functions=true via the Pages API")
     else:
         # Never deploy state_dir directly -- the SAME allowlist
         # publish()/gc() use, via the shared helper, so a friend re-
@@ -663,6 +664,7 @@ def run_setup(dry_run: bool, wrangler, config_path: Path, io: SetupIO,
             require_fail_closed(wrangler, project)
             io.print(f"  running: {_deploy_argv(project, deploy_dir)}")
             wrangler.pages_deploy(project, deploy_dir)
+            wrangler.pages_project_require_functions(project)
 
     _post_deploy_binding_check(wrangler, kv_namespace_id, base_url, io, dry_run)
 
