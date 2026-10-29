@@ -18,7 +18,7 @@ from jimemo.publish.setup import (
     TOKEN_MISSING_MESSAGE,
     run_setup,
 )
-from jimemo.publish.wrangler import NO_WRANGLER_MESSAGE, MockWrangler
+from jimemo.publish.wrangler import NO_WRANGLER_MESSAGE, MockWrangler, PagesProjectExistsError
 
 
 def test_setup_validates_project_names_via_configs_shared_validator():
@@ -106,11 +106,7 @@ class AlreadyExistsOnCreateWrangler(MockWrangler):
 
     def pages_project_create(self, project, branch="main"):
         self.calls.append(("pages_project_create", project, branch))
-        raise PublishError(
-            "wrangler pages project create failed (exit 1): "
-            "A project with this name already exists. Choose a different "
-            "project name. [code: 8000002]"
-        )
+        raise PagesProjectExistsError("Pages project API POST: duplicate project 8000002")
 
 
 class BrokenProjectCreateWrangler(MockWrangler):
@@ -222,10 +218,11 @@ def test_dry_run_prints_pages_project_create_plan(tmp_path):
 
     text = io.text()
     assert "pages project list --json" in text
-    assert (
-        f"npx wrangler pages project create {DEFAULT_PROJECT_NAME} "
-        "--production-branch main"
-    ) in text
+    assert "-X POST" in text
+    assert '"production_branch":"main"' in text
+    assert f'"name":"{DEFAULT_PROJECT_NAME}"' in text
+    assert "/accounts/<ACCOUNT_ID>/pages/projects" in text
+    assert "npx wrangler pages project create" not in text
 
 
 def test_dry_run_prints_the_state_dir_asset_install_plan(tmp_path):
@@ -976,4 +973,15 @@ def test_setup_dry_run_argv_matches_the_seam():
 
     assert shlex.split(_fail_closed_argv("acct-1", "p")) == (
         Wrangler(account_id="acct-1")._cf_api_argv("PATCH", "p", FAIL_CLOSED_BODY)
+    )
+
+
+def test_project_create_dry_run_matches_rest_seam():
+    import shlex
+    from jimemo.publish.wrangler import Wrangler
+
+    assert shlex.split(setup_mod._project_create_argv("acct-1", "my-project")) == (
+        Wrangler(account_id="acct-1")._cf_api_argv(
+            "POST", "", Wrangler.pages_project_create_body("my-project")
+        )
     )

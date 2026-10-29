@@ -11,13 +11,16 @@ notes.ito.com), use the `command` backend instead and point
 
 ## What the wizard can't automate
 
-The wizard's `wrangler` calls go through a narrow seam
+The wizard's Cloudflare calls go through a narrow seam
 (`check_available`, `pages_project_names`, `pages_project_create`,
 `pages_deploy`, `kv_put`, `kv_get`, `kv_list` -- see
 `src/jimemo/publish/wrangler.py`). The same seam has three more methods
 (`curl_version`, `pages_project_fail_open`, `pages_project_set_fail_closed`)
 that reach the Pages project REST API through `curl`, because wrangler has
-no subcommand for `fail_open`. It does not create a Cloudflare
+no subcommand for `fail_open`. `pages_project_create` also uses this REST
+path: Wrangler 4.153.0 redirects its create command to Workers, while
+`POST /accounts/{id}/pages/projects` creates a classic Pages project
+with `name` and `production_branch` across Wrangler versions. It does not create a Cloudflare
 account, create a KV namespace, or bind a KV namespace to a Pages
 project -- there's no single wrangler CLI verb for the last one (it's a
 one-time dashboard action), so the wizard prints the exact command or
@@ -123,7 +126,7 @@ automatically, mirroring notes.ito.com's model and ordering:
    - prompt for a Cloudflare Pages project name (default `jimemo-notes`)
      and your Cloudflare account id,
    - create that Pages project if your account does not already have one
-     by that name,
+     by that name, using the Pages REST API,
    - print the command to create a KV namespace
      (`npx wrangler kv namespace create <project>-tombstones`) and ask
      for the resulting id,

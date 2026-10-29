@@ -9,10 +9,12 @@ a token itself: every method here just execs ``npx wrangler <subcommand>
 from its environment. If jimemo doesn't touch the token, it can't leak
 the token.
 
-The one thing wrangler cannot do is read or set a Pages project's
+Project creation uses the stable Pages REST API: recent Wrangler releases
+redirect ``pages project create`` to Workers. Wrangler also cannot read or
+set a Pages project's
 ``deployment_configs.*.fail_open`` (Cloudflare's default,
 true, serves the static files WITHOUT the tombstone middleware whenever
-Functions cannot run, so purged hashes come back). Those two calls go to
+Functions cannot run, so purged hashes come back). Those calls go to
 the Pages project REST API through ``curl``, run via the same injectable
 runner -- and curl, not jimemo, imports the token from ITS environment
 (``--variable %CLOUDFLARE_API_TOKEN`` + ``--expand-header``, curl >= 8.3),
@@ -58,7 +60,7 @@ CF_API = "https://api.cloudflare.com/client/v4"
 MIN_CURL = (8, 3, 0)
 
 TOKEN_ENV_REQUIRED_MESSAGE = (
-    "the fail-closed check needs CLOUDFLARE_API_TOKEN in the environment "
+    "the Pages project API needs CLOUDFLARE_API_TOKEN in the environment "
     "(wrangler login credentials cannot read the Pages project config); "
     "export it and retry"
 )
@@ -91,13 +93,17 @@ def _run(argv: List[str], env: Optional[Dict[str, str]] = None) -> CompletedProc
     return subprocess.run(argv, capture_output=True, text=True, env=env)
 
 
+class PagesProjectExistsError(PublishError):
+    """The Pages create endpoint reports duplicate project code 8000002."""
+
+
 class Wrangler:
     """Thin argv-building wrapper around ``npx wrangler``, one method per
-    subcommand the cloudflare backend needs: listing/creating Cloudflare
-    Pages projects for setup, deploying a directory to Cloudflare Pages,
+    subcommand the cloudflare backend needs: listing Cloudflare Pages
+    projects for setup, deploying a directory to Cloudflare Pages,
     and reading/writing/listing the tombstone KV namespace. Plus two
-    Pages project-config calls (fail_open read/set) that wrangler has no
-    subcommand for, made through ``curl`` with the same runner -- see the
+    Pages project-config calls (fail_open read/set) and project creation,
+    made through ``curl`` with the same runner -- see the
     module docstring for why curl and not Python holds the token.
 
     Account scoping: CloudflareConfig carries an ``account_id``. None of
@@ -217,18 +223,16 @@ class Wrangler:
             if isinstance(item, dict) and isinstance(item.get("name"), str)
         ]
 
+    @staticmethod
+    def pages_project_create_body(project: str, branch: str = "main") -> str:
+        return json.dumps({"name": project, "production_branch": branch},
+                          separators=(",", ":"))
+
     def pages_project_create(
         self, project: str, branch: str = "main"
-    ) -> CompletedProcess:
-        """Create a Cloudflare Pages project with the production branch
-        jimemo deploys to."""
-        return self._invoke(
-            [
-                "pages", "project", "create", project,
-                "--production-branch", branch,
-            ],
-            "pages project create",
-        )
+    ) -> Dict[str, Any]:
+        """Create classic Pages via REST, independent of Wrangler's CLI routing."""
+        return self._cf_api("POST", "", self.pages_project_create_body(project, branch))
 
     def curl_version(self) -> Optional[Tuple[int, int, int]]:
         """(major, minor, patch) of the curl on PATH, or None when curl is
@@ -257,13 +261,14 @@ class Wrangler:
         ]
         if body is not None:
             argv += ["-d", body]
-        argv.append(f"{CF_API}/accounts/{self.account_id}/pages/projects/{project}")
+        suffix = f"/{project}" if project else ""
+        argv.append(f"{CF_API}/accounts/{self.account_id}/pages/projects{suffix}")
         return argv
 
     def _cf_api(self, method: str, project: str,
                 body: Optional[str] = None) -> Dict[str, Any]:
-        """GET/PATCH the Pages project via curl. Returns the API ``result``
-        object. Every failure mode is a PublishError (a refusal upstream):
+        """GET/PATCH a Pages project or POST to the project collection via curl.
+        Returns the API ``result`` object. Every failure mode is a PublishError (a refusal upstream):
         no account id, no token in the environment (presence only -- the
         value is never read), curl missing, nonzero exit, non-JSON, or an
         envelope whose ``success`` is not the literal boolean true."""
@@ -283,7 +288,7 @@ class Wrangler:
             # carries only errno text and the executable name -- never
             # argv or the environment.
             raise PublishError(
-                f"could not run curl for the fail-closed check "
+                f"could not run curl for the Pages project API "
                 f"({e.__class__.__name__}: {e}); "
                 f"{CURL_TOO_OLD_MESSAGE.format(found='none usable on PATH')}"
             )
@@ -308,7 +313,12 @@ class Wrangler:
                 for e in errors
             ):
                 hint = "; check that CLOUDFLARE_API_TOKEN is valid and scoped Pages:Edit"
-            raise PublishError(
+            error_type = PublishError
+            if method == "POST" and not project and isinstance(errors, list) and any(
+                isinstance(e, dict) and e.get("code") == 8000002 for e in errors
+            ):
+                error_type = PagesProjectExistsError
+            raise error_type(
                 f"Pages project API {method} {project!r} did not answer "
                 f"success=true: {errors!r}{hint}"
             )
@@ -424,12 +434,12 @@ class MockWrangler:
 
     def pages_project_create(
         self, project: str, branch: str = "main"
-    ) -> CompletedProcess:
+    ) -> Dict[str, Any]:
         self.calls.append(("pages_project_create", project, branch))
         self._projects.add(project)
         # Cloudflare's default for a new project: both environments open.
         self.fail_open = {"production": True, "preview": True}
-        return CompletedProcess([], 0, stdout="", stderr="")
+        return {"name": project, "production_branch": branch}
 
     def curl_version(self) -> Optional[Tuple[int, int, int]]:
         self.calls.append(("curl_version",))

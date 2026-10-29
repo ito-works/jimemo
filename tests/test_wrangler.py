@@ -102,18 +102,24 @@ def test_pages_project_names_malformed_json_raises_publish_error():
     assert "pages project list" in str(exc.value)
 
 
-def test_pages_project_create_builds_expected_argv():
-    runner = FakeRunner(CompletedProcess([], 0, stdout="", stderr=""))
-    w = Wrangler(runner=runner)
+@pytest.mark.parametrize("branch", ["main", "production"])
+def test_pages_project_create_uses_classic_pages_rest(monkeypatch, branch):
+    monkeypatch.setenv("CLOUDFLARE_API_TOKEN", "super-secret-token")
+    runner = FakeRunner(CompletedProcess([], 0, stdout=json.dumps({
+        "success": True, "result": {"name": "my-project"}}), stderr=""))
+    w = Wrangler(runner=runner, account_id="acct-1")
 
-    w.pages_project_create("my-project")
+    assert w.pages_project_create("my-project", branch) == {"name": "my-project"}
 
-    assert runner.calls == [
-        [
-            "npx", "wrangler", "pages", "project", "create", "my-project",
-            "--production-branch", "main",
-        ]
-    ]
+    argv, = runner.calls
+    assert argv[:3] == ["curl", "-q", "-sS"]
+    assert argv[argv.index("-X") + 1] == "POST"
+    assert json.loads(argv[argv.index("-d") + 1]) == {
+        "name": "my-project", "production_branch": branch}
+    assert argv[-1] == "https://api.cloudflare.com/client/v4/accounts/acct-1/pages/projects"
+    assert "%CLOUDFLARE_API_TOKEN" in argv
+    assert "super-secret-token" not in " ".join(argv)
+    assert runner.envs == [None]
 
 
 def test_kv_put_builds_expected_argv():
@@ -179,7 +185,6 @@ def test_missing_npx_raises_clear_error_from_every_method(tmp_path):
 
     for call in (
         lambda: w.pages_project_names(),
-        lambda: w.pages_project_create("p"),
         lambda: w.pages_deploy("p", tmp_path),
         lambda: w.kv_put("ns", "abc123", "ts"),
         lambda: w.kv_get("ns", "abc123"),
@@ -579,3 +584,34 @@ def test_other_error_codes_get_no_token_hint(monkeypatch):
         w.pages_project_fail_open("friend-notes")
     assert TOKEN_HINT not in str(exc.value)
     assert "8000007" in str(exc.value)
+
+
+@pytest.mark.parametrize("stdout,code,match", [
+    ("not JSON", 0, "could not parse JSON"),
+    ('{"success": false, "errors": [{"code": 9106}], "result": null}', 0, "scoped Pages:Edit"),
+    ('{"success": true, "result": []}', 0, "success=true"),
+    ("", 7, "exit 7"),
+])
+def test_project_create_refuses_api_failures(monkeypatch, stdout, code, match):
+    w, _ = _wrangler_with_token(monkeypatch, CompletedProcess([], code, stdout=stdout, stderr="oops"))
+    with pytest.raises(PublishError, match=match):
+        w.pages_project_create("friend-notes")
+
+
+def test_project_create_duplicate_has_a_specific_error(monkeypatch):
+    from jimemo.publish.wrangler import PagesProjectExistsError
+    response = json.dumps({"success": False, "result": None,
+                           "errors": [{"code": 8000002, "message": "Project exists"}]})
+    w, _ = _wrangler_with_token(monkeypatch, _ok(response))
+    with pytest.raises(PagesProjectExistsError):
+        w.pages_project_create("friend-notes")
+
+
+def test_project_create_requires_token_and_account_id(monkeypatch):
+    monkeypatch.delenv("CLOUDFLARE_API_TOKEN", raising=False)
+    runner = FakeRunner(_ok("{}"))
+    with pytest.raises(PublishError, match="account_id"):
+        Wrangler(runner=runner).pages_project_create("p")
+    with pytest.raises(PublishError, match="CLOUDFLARE_API_TOKEN"):
+        Wrangler(runner=runner, account_id="acct-1").pages_project_create("p")
+    assert runner.calls == []
