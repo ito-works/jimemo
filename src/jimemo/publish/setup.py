@@ -96,6 +96,7 @@ read alike, and the one command setup actually blocks on (the KV
 namespace create) was easy to miss mid-prose.
 """
 import os
+import shlex
 import tempfile
 from pathlib import Path
 from typing import Optional
@@ -179,22 +180,18 @@ class RealIO(SetupIO):
         return raw in ("y", "yes")
 
 
-def _deploy_argv(project: str, directory) -> str:
-    return (
-        f"npx wrangler pages deploy {directory} "
-        f"--project-name {project} --branch main"
-    )
+def _deploy_argv(project: str, directory, executable: str = "wrangler") -> str:
+    return shlex.join([executable, "pages", "deploy", str(directory),
+                       "--project-name", project, "--branch", "main"])
 
 
-def _project_list_argv() -> str:
-    return "npx wrangler pages project list --json"
+def _project_list_argv(executable: str = "wrangler") -> str:
+    return shlex.join([executable, "pages", "project", "list", "--json"])
 
 
-def _project_create_argv(project: str) -> str:
-    return (
-        f"npx wrangler pages project create {project} "
-        "--production-branch main"
-    )
+def _project_create_argv(project: str, executable: str = "wrangler") -> str:
+    return shlex.join([executable, "pages", "project", "create", project,
+                       "--production-branch", "main"])
 
 
 def _fail_closed_argv(account_id: str, project: str) -> str:
@@ -220,18 +217,14 @@ def _is_existing_pages_project_error(exc: PublishError) -> bool:
     )
 
 
-def _kv_put_argv(kv_namespace_id: str) -> str:
-    return (
-        f"npx wrangler kv key put {_SETUP_CHECK_KEY} {_SETUP_CHECK_VALUE} "
-        f"--namespace-id {kv_namespace_id} --remote"
-    )
+def _kv_put_argv(kv_namespace_id: str, executable: str = "wrangler") -> str:
+    return shlex.join([executable, "kv", "key", "put", _SETUP_CHECK_KEY,
+                       _SETUP_CHECK_VALUE, "--namespace-id", kv_namespace_id, "--remote"])
 
 
-def _kv_get_argv(kv_namespace_id: str) -> str:
-    return (
-        f"npx wrangler kv key get {_SETUP_CHECK_KEY} "
-        f"--namespace-id {kv_namespace_id} --text --remote"
-    )
+def _kv_get_argv(kv_namespace_id: str, executable: str = "wrangler") -> str:
+    return shlex.join([executable, "kv", "key", "get", _SETUP_CHECK_KEY,
+                       "--namespace-id", kv_namespace_id, "--text", "--remote"])
 
 
 def _print_user_command(io: SetupIO, command: str) -> None:
@@ -270,8 +263,8 @@ def _print_intro(io: SetupIO) -> None:
         "     ids (project name, account id, KV namespace id, base URL) "
         "get written to\n"
         "     ~/.jimemo/config.toml.\n"
-        "  3. Node + npx (wrangler runs via `npx wrangler`) and curl >= 8.3 (used once\n"
-        "     per deploy to confirm the project is fail-closed; see Step 2).\n"
+        "  3. Wrangler on PATH or selected via JIMEMO_WRANGLER, and curl >= 8.3\n"
+        "     (used once per deploy to confirm the project is fail-closed; see Step 2).\n"
         "\n"
         "How to read this output: a command you must run yourself appears "
         "on its own\n"
@@ -298,7 +291,7 @@ def _print_single_machine_warning(io: SetupIO, state_dir: Path) -> None:
     )
 
 
-def _print_kv_instructions(io: SetupIO, project: str) -> None:
+def _print_kv_instructions(io: SetupIO, project: str, executable: str = "wrangler") -> None:
     io.print(
         "\n"
         "ACTION REQUIRED -- Cloudflare KV namespace + binding. These two "
@@ -313,7 +306,7 @@ def _print_kv_instructions(io: SetupIO, project: str) -> None:
         "     Run this yourself, in a separate terminal:"
     )
     _print_user_command(
-        io, f"npx wrangler kv namespace create {project}-tombstones"
+        io, shlex.join([executable, "kv", "namespace", "create", f"{project}-tombstones"])
     )
     io.print(
         "     Copy the \"id\" field from its output -- the prompt below "
@@ -345,8 +338,8 @@ def _post_deploy_binding_check(
     make -- see docs/publish-setup.md for the manual steps.
     """
     io.print("\nPost-deploy binding check (best-effort):")
-    put_argv = _kv_put_argv(kv_namespace_id)
-    get_argv = _kv_get_argv(kv_namespace_id)
+    put_argv = _kv_put_argv(kv_namespace_id, wrangler.executable)
+    get_argv = _kv_get_argv(kv_namespace_id, wrangler.executable)
 
     if dry_run:
         io.print(f"  [dry-run] would run: {put_argv}")
@@ -466,7 +459,7 @@ def run_setup(dry_run: bool, wrangler, config_path: Path, io: SetupIO,
     runs a best-effort post-deploy KV check, and writes
     ~/.jimemo/config.toml.
 
-    Raises PublishError if CLOUDFLARE_API_TOKEN is unset, wrangler/npx
+    Raises PublishError if CLOUDFLARE_API_TOKEN is unset, the selected Wrangler
     is unavailable, or (non-dry-run) a wrangler call fails or the
     project name is invalid.
     """
@@ -478,7 +471,7 @@ def run_setup(dry_run: bool, wrangler, config_path: Path, io: SetupIO,
         raise PublishError(TOKEN_MISSING_MESSAGE)
 
     if dry_run:
-        io.print("[dry-run] would check: npx/wrangler available on PATH")
+        io.print("[dry-run] would check: selected Wrangler available (PATH or JIMEMO_WRANGLER)")
     elif not wrangler.check_available():
         raise PublishError(NO_WRANGLER_MESSAGE)
 
@@ -547,17 +540,17 @@ def run_setup(dry_run: bool, wrangler, config_path: Path, io: SetupIO,
 
     io.print(f"\nStep 2: ensure Cloudflare Pages project {project!r} exists")
     if dry_run:
-        io.print(f"  [dry-run] would run: {_project_list_argv()}")
+        io.print(f"  [dry-run] would run: {_project_list_argv(wrangler.executable)}")
         io.print(
             "  [dry-run] would create it if missing via: "
-            f"{_project_create_argv(project)}"
+            f"{_project_create_argv(project, wrangler.executable)}"
         )
     else:
         project_names = wrangler.pages_project_names()
         if project in project_names:
             io.print(f"  project {project!r} already exists")
         else:
-            io.print(f"  creating project via: {_project_create_argv(project)}")
+            io.print(f"  creating project via: {_project_create_argv(project, wrangler.executable)}")
             try:
                 wrangler.pages_project_create(project)
             except PublishError as exc:
@@ -583,7 +576,7 @@ def run_setup(dry_run: bool, wrangler, config_path: Path, io: SetupIO,
 
     _print_single_machine_warning(io, state_dir)
 
-    _print_kv_instructions(io, project)
+    _print_kv_instructions(io, project, wrangler.executable)
     if dry_run:
         io.print(
             f"[dry-run] would prompt for the KV namespace id; using a "
@@ -639,7 +632,7 @@ def run_setup(dry_run: bool, wrangler, config_path: Path, io: SetupIO,
             "(functions/_middleware.js, _headers, index.html, and "
             "published hash directories only -- .git/, .DS_Store, and "
             "other synced strays excluded) via: "
-            f"{_deploy_argv(project, '<allowlisted-copy>')}"
+            f"{_deploy_argv(project, '<allowlisted-copy>', wrangler.executable)}"
         )
     else:
         # Never deploy state_dir directly -- the SAME allowlist
@@ -661,7 +654,7 @@ def run_setup(dry_run: bool, wrangler, config_path: Path, io: SetupIO,
             # Same preflight every publish/gc runs: never deploy on a
             # PATCH response alone, re-read the project first.
             require_fail_closed(wrangler, project)
-            io.print(f"  running: {_deploy_argv(project, deploy_dir)}")
+            io.print(f"  running: {_deploy_argv(project, deploy_dir, wrangler.executable)}")
             wrangler.pages_deploy(project, deploy_dir)
 
     _post_deploy_binding_check(wrangler, kv_namespace_id, base_url, io, dry_run)

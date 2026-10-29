@@ -11,6 +11,12 @@ from jimemo.errors import PublishError
 from jimemo.publish.wrangler import NO_WRANGLER_MESSAGE, MockWrangler, Wrangler
 
 
+@pytest.fixture(autouse=True)
+def mock_wrangler_choice(monkeypatch):
+    # Keep argv tests independent of any globally installed Wrangler.
+    monkeypatch.setenv("JIMEMO_WRANGLER", "mock-wrangler")
+
+
 class FakeRunner:
     """Records every argv (and the env dict passed alongside it, if any)
     it's called with and returns a scripted result (or the next of
@@ -30,10 +36,10 @@ class FakeRunner:
 
 
 class RaisingRunner:
-    """Simulates `npx` itself being absent from PATH."""
+    """Simulates the selected Wrangler being absent from PATH."""
 
     def __call__(self, argv, env=None):
-        raise FileNotFoundError("npx: command not found")
+        raise FileNotFoundError("mock-wrangler: command not found")
 
 
 def test_pages_deploy_builds_expected_argv(tmp_path):
@@ -43,7 +49,7 @@ def test_pages_deploy_builds_expected_argv(tmp_path):
     w.pages_deploy("my-project", tmp_path)
 
     assert runner.calls == [
-        ["npx", "wrangler", "pages", "deploy", str(tmp_path),
+        ["mock-wrangler", "pages", "deploy", str(tmp_path),
          "--project-name", "my-project", "--branch", "main"]
     ]
 
@@ -55,7 +61,7 @@ def test_pages_deploy_accepts_a_different_branch(tmp_path):
     w.pages_deploy("my-project", tmp_path, branch="preview")
 
     assert runner.calls == [
-        ["npx", "wrangler", "pages", "deploy", str(tmp_path),
+        ["mock-wrangler", "pages", "deploy", str(tmp_path),
          "--project-name", "my-project", "--branch", "preview"]
     ]
 
@@ -74,7 +80,7 @@ def test_pages_project_names_builds_expected_argv_and_parses_json():
     names = w.pages_project_names()
 
     assert runner.calls == [
-        ["npx", "wrangler", "pages", "project", "list", "--json"]
+        ["mock-wrangler", "pages", "project", "list", "--json"]
     ]
     assert names == ["one", "two"]
 
@@ -110,7 +116,7 @@ def test_pages_project_create_builds_expected_argv():
 
     assert runner.calls == [
         [
-            "npx", "wrangler", "pages", "project", "create", "my-project",
+            "mock-wrangler", "pages", "project", "create", "my-project",
             "--production-branch", "main",
         ]
     ]
@@ -123,7 +129,7 @@ def test_kv_put_builds_expected_argv():
     w.kv_put("ns123", "abc123", "2026-07-05T00:00:00.000Z")
 
     assert runner.calls == [
-        ["npx", "wrangler", "kv", "key", "put", "abc123", "2026-07-05T00:00:00.000Z",
+        ["mock-wrangler", "kv", "key", "put", "abc123", "2026-07-05T00:00:00.000Z",
          "--namespace-id", "ns123", "--remote"]
     ]
 
@@ -135,7 +141,7 @@ def test_kv_get_builds_expected_argv_and_returns_stripped_value():
     value = w.kv_get("ns123", "abc123")
 
     assert runner.calls == [
-        ["npx", "wrangler", "kv", "key", "get", "abc123",
+        ["mock-wrangler", "kv", "key", "get", "abc123",
          "--namespace-id", "ns123", "--text", "--remote"]
     ]
     assert value == "2026-07-05T00:00:00.000Z"
@@ -149,7 +155,7 @@ def test_kv_list_builds_expected_argv_and_parses_json():
     entries = w.kv_list("ns123")
 
     assert runner.calls == [
-        ["npx", "wrangler", "kv", "key", "list", "--namespace-id", "ns123", "--remote"]
+        ["mock-wrangler", "kv", "key", "list", "--namespace-id", "ns123", "--remote"]
     ]
     assert entries == [{"name": "abc123"}, {"name": "def456"}]
 
@@ -174,7 +180,7 @@ def test_nonzero_exit_raises_publish_error_with_action_and_stderr():
     assert "boom: not authorized" in msg
 
 
-def test_missing_npx_raises_clear_error_from_every_method(tmp_path):
+def test_missing_wrangler_raises_clear_error_from_every_method(tmp_path):
     w = Wrangler(runner=RaisingRunner())
 
     for call in (
@@ -190,14 +196,14 @@ def test_missing_npx_raises_clear_error_from_every_method(tmp_path):
         assert str(exc.value) == NO_WRANGLER_MESSAGE
 
 
-def test_check_available_true_when_npx_resolves(monkeypatch):
+def test_check_available_true_when_wrangler_resolves(monkeypatch):
     import jimemo.publish.wrangler as mod
 
-    monkeypatch.setattr(mod.shutil, "which", lambda name: "/usr/bin/npx")
+    monkeypatch.setattr(mod.shutil, "which", lambda name: "/usr/bin/wrangler")
     assert Wrangler().check_available() is True
 
 
-def test_check_available_false_when_npx_missing(monkeypatch):
+def test_check_available_false_when_wrangler_missing(monkeypatch):
     import jimemo.publish.wrangler as mod
 
     monkeypatch.setattr(mod.shutil, "which", lambda name: None)
@@ -579,3 +585,64 @@ def test_other_error_codes_get_no_token_hint(monkeypatch):
         w.pages_project_fail_open("friend-notes")
     assert TOKEN_HINT not in str(exc.value)
     assert "8000007" in str(exc.value)
+
+
+def _mock_executable(path):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(f"#!{sys.executable}\nimport json, sys\nprint(json.dumps(sys.argv[1:]))\n")
+    path.chmod(0o755)
+    return path
+
+
+def test_wrangler_on_path_is_used_directly(tmp_path, monkeypatch):
+    monkeypatch.delenv("JIMEMO_WRANGLER")
+    executable = _mock_executable(tmp_path / "wrangler")
+    monkeypatch.setenv("PATH", str(tmp_path))
+    w = Wrangler()
+    assert w.check_available()
+    assert w.executable == str(executable)
+    assert json.loads(w.kv_get("ns", "key")) == [
+        "kv", "key", "get", "key", "--namespace-id", "ns", "--text", "--remote"]
+
+
+def test_env_override_wins_over_path_and_survives_cwd_change(tmp_path, monkeypatch):
+    _mock_executable(tmp_path / "wrangler")
+    executable = _mock_executable(tmp_path / "tools" / "reviewed wrangler")
+    monkeypatch.setenv("PATH", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("JIMEMO_WRANGLER", "tools/reviewed wrangler")
+    w = Wrangler()
+    assert w.executable == str(executable)
+    monkeypatch.chdir(tmp_path.parent)
+    assert w.check_available()
+    assert json.loads(w.kv_get("ns", "key"))[0:4] == ["kv", "key", "get", "key"]
+
+
+@pytest.mark.parametrize("override", ["missing-wrangler", "", "npx wrangler@4.153.0"])
+def test_invalid_override_refuses_without_falling_back(tmp_path, monkeypatch, override):
+    _mock_executable(tmp_path / "wrangler")
+    _mock_executable(tmp_path / "npx")
+    monkeypatch.setenv("PATH", str(tmp_path))
+    monkeypatch.setenv("JIMEMO_WRANGLER", override)
+    w = Wrangler()
+    assert not w.check_available()
+    with pytest.raises(PublishError, match="JIMEMO_WRANGLER"):
+        w.kv_get("ns", "key")
+
+
+def test_npx_alone_does_not_make_wrangler_available(tmp_path, monkeypatch):
+    _mock_executable(tmp_path / "npx")
+    monkeypatch.setenv("PATH", str(tmp_path))
+    monkeypatch.delenv("JIMEMO_WRANGLER")
+    w = Wrangler()
+    assert not w.check_available()
+    with pytest.raises(PublishError, match="does not download Wrangler"):
+        w.kv_get("ns", "key")
+
+
+def test_constructor_executable_overrides_environment(tmp_path):
+    executable = _mock_executable(tmp_path / "chosen-wrangler")
+    w = Wrangler(executable=str(executable))
+    assert w.check_available()
+    assert w.executable == str(executable)
+    assert json.loads(w.kv_get("ns", "key"))[0] == "kv"

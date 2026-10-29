@@ -1,11 +1,11 @@
-"""Wrangler seam: wraps ``npx wrangler ...`` invocations for the
+"""Wrangler seam: wraps ``wrangler ...`` invocations for the
 ``cloudflare`` publish backend (``cloudflare_backend.py``).
 
 Auth: wrangler resolves its own Cloudflare API token -- from the
 ``CLOUDFLARE_API_TOKEN`` environment variable, or its own ``wrangler
 login`` credential store. jimemo never reads, stores, forwards, or logs
-a token itself: every method here just execs ``npx wrangler <subcommand>
-...`` as a plain subprocess and lets wrangler's own process resolve auth
+a token itself: every method here just execs ``wrangler <subcommand> ...``
+as a plain subprocess and lets wrangler's own process resolve auth
 from its environment. If jimemo doesn't touch the token, it can't leak
 the token.
 
@@ -43,13 +43,14 @@ from ..errors import PublishError
 
 Runner = Callable[[List[str], Optional[Dict[str, str]]], CompletedProcess]
 
-#: Raised (as a PublishError) by any Wrangler method when the ``npx``
+#: Raised (as a PublishError) by any Wrangler method when the ``wrangler``
 #: binary itself can't be found. Exported so cloudflare_backend.py can
 #: raise the identical message from its own upfront check_available()
 #: gate, rather than waiting for a subprocess to fail.
 NO_WRANGLER_MESSAGE = (
-    "cloudflare backend needs Node + wrangler; install Node "
-    "(https://nodejs.org) or use the command backend"
+    "cloudflare backend needs Wrangler on PATH or JIMEMO_WRANGLER set to "
+    "an executable path; install a chosen Wrangler version or provide a "
+    "wrapper (jimemo does not download Wrangler)"
 )
 
 CF_API = "https://api.cloudflare.com/client/v4"
@@ -92,7 +93,7 @@ def _run(argv: List[str], env: Optional[Dict[str, str]] = None) -> CompletedProc
 
 
 class Wrangler:
-    """Thin argv-building wrapper around ``npx wrangler``, one method per
+    """Thin argv-building wrapper around ``wrangler``, one method per
     subcommand the cloudflare backend needs: listing/creating Cloudflare
     Pages projects for setup, deploying a directory to Cloudflare Pages,
     and reading/writing/listing the tombstone KV namespace. Plus two
@@ -102,7 +103,7 @@ class Wrangler:
 
     Account scoping: CloudflareConfig carries an ``account_id``. None of
     these subcommands take an ``--account-id`` flag (checked against
-    ``npx wrangler pages deploy --help`` / ``npx wrangler kv key {put,get,
+    ``wrangler pages deploy --help`` / ``wrangler kv key {put,get,
     list} --help``), so it's threaded through via the
     ``CLOUDFLARE_ACCOUNT_ID`` environment variable instead -- the same
     variable wrangler already reads directly from its own environment,
@@ -119,12 +120,18 @@ class Wrangler:
     def __init__(
         self,
         runner: Runner = _run,
-        npx: str = "npx",
+        executable: Optional[str] = None,
         account_id: Optional[str] = None,
         curl: str = "curl",
     ):
         self._run = runner
-        self._npx = npx
+        # Resolve once, before deploy can change subprocess cwd. A wrapper
+        # path is one argv element, never a shell command or an npm package.
+        selected = (executable if executable is not None
+                    else os.environ.get("JIMEMO_WRANGLER", "wrangler"))
+        resolved = shutil.which(selected) or selected
+        self.executable = (str(Path(resolved).absolute())
+                           if os.path.dirname(resolved) else resolved)
         self._curl = curl
         #: Non-secret Cloudflare account id. Public and mutable (not
         #: constructor-only) because setup.py's `jimemo publish setup`
@@ -134,16 +141,18 @@ class Wrangler:
         self.account_id = account_id
 
     def check_available(self) -> bool:
-        """True if ``npx`` resolves on PATH.
+        """True if the selected executable is available.
+
+        JIMEMO_WRANGLER overrides PATH discovery; no npx fallback is used.
 
         A cheap presence check -- it does not invoke wrangler itself, so
         it needs no network access and no auth. Callers that skip this
         and call a method anyway still get NO_WRANGLER_MESSAGE from
-        _invoke if npx turns out to be missing; this just lets a caller
+        _invoke if the selected executable cannot run; this just lets a caller
         (cloudflare_backend.py, or the setup wizard) fail fast with
         the same clear message before doing any other work.
         """
-        return shutil.which(self._npx) is not None
+        return shutil.which(self.executable) is not None
 
     def _invoke(self, argv: List[str], action: str) -> CompletedProcess:
         env = (
@@ -152,8 +161,8 @@ class Wrangler:
             else None
         )
         try:
-            result = self._run([self._npx, "wrangler"] + argv, env)
-        except FileNotFoundError:
+            result = self._run([self.executable] + argv, env)
+        except OSError:
             raise PublishError(NO_WRANGLER_MESSAGE)
         if result.returncode != 0:
             stderr = (result.stderr or "").strip()
@@ -400,7 +409,9 @@ class MockWrangler:
         deploy_stdout: str = "Deployment complete!\n",
         projects: Optional[List[str]] = None,
         fail_open: bool = False,
+        executable: str = "wrangler",
     ):
+        self.executable = executable
         self.calls: List[tuple] = []
         self._kv: Dict[str, str] = {}
         self._deploy_stdout = deploy_stdout

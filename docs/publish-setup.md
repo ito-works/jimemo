@@ -100,8 +100,36 @@ automatically, mirroring notes.ito.com's model and ordering:
    export CLOUDFLARE_API_TOKEN=...
    ```
 
-3. **Install Node** if you don't have it (wrangler runs via `npx
-   wrangler`): https://nodejs.org
+3. **Install Node** if you don't have it: https://nodejs.org
+
+   **Choose and install Wrangler.** Jimemo runs `wrangler` already on
+   PATH. Install a version you have reviewed, for example:
+
+   ```
+   npm install --global wrangler@4.153.0
+   wrangler --version
+   ```
+
+   To use a different executable (including a project-local install), set:
+
+   ```
+   export JIMEMO_WRANGLER=/absolute/path/to/node_modules/.bin/wrangler
+   ```
+
+   The variable takes precedence over PATH discovery and names one executable,
+   not a shell command or a package version. A missing or unusable override
+   refuses the operation. Jimemo never falls back to `npx` or fetches the
+   newest release. If you want `npx`, create an executable wrapper that pins
+   the version explicitly, then point `JIMEMO_WRANGLER` at that wrapper:
+
+   ```sh
+   #!/bin/sh
+   exec npx --yes wrangler@4.153.0 "$@"
+   ```
+
+   That wrapper opts into fetching the pinned release. Setup's printed
+   commands, including the manual namespace-create step, use your selected
+   executable. The setting applies to setup, publish, purge, list, and gc.
 
    Also make sure `curl --version` reports 8.3 or newer (macOS ships 8.7;
    Debian 12's 7.88 is too old). The wizard uses curl once to set the Pages
@@ -125,7 +153,8 @@ automatically, mirroring notes.ito.com's model and ordering:
    - create that Pages project if your account does not already have one
      by that name,
    - print the command to create a KV namespace
-     (`npx wrangler kv namespace create <project>-tombstones`) and ask
+     (`wrangler kv namespace create <project>-tombstones`, using your selected
+     executable) and ask
      for the resulting id,
    - print the dashboard step to bind that namespace to the Pages
      project's Settings -> Functions -> KV namespace bindings under the
