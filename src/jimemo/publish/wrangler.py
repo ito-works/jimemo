@@ -41,7 +41,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 from ..errors import PublishError
 
-Runner = Callable[[List[str], Optional[Dict[str, str]]], CompletedProcess]
+Runner = Callable[..., CompletedProcess]
 
 #: Raised (as a PublishError) by any Wrangler method when the ``npx``
 #: binary itself can't be found. Exported so cloudflare_backend.py can
@@ -81,14 +81,15 @@ FAIL_CLOSED_BODY = json.dumps(
 )
 
 
-def _run(argv: List[str], env: Optional[Dict[str, str]] = None) -> CompletedProcess:
+def _run(argv: List[str], env: Optional[Dict[str, str]] = None,
+         *, cwd: Optional[Path] = None) -> CompletedProcess:
     """Default runner: a real subprocess, list-form argv only, never
     shell=True. ``env=None`` (the default) means inherit the parent
     process's environment unchanged -- Wrangler only passes a non-None
     env when an account_id is configured, to layer
     CLOUDFLARE_ACCOUNT_ID on top of that inherited environment (see
     Wrangler._invoke)."""
-    return subprocess.run(argv, capture_output=True, text=True, env=env)
+    return subprocess.run(argv, capture_output=True, text=True, env=env, cwd=cwd)
 
 
 class Wrangler:
@@ -145,14 +146,17 @@ class Wrangler:
         """
         return shutil.which(self._npx) is not None
 
-    def _invoke(self, argv: List[str], action: str) -> CompletedProcess:
+    def _invoke(self, argv: List[str], action: str,
+                *, cwd: Optional[Path] = None) -> CompletedProcess:
         env = (
             dict(os.environ, CLOUDFLARE_ACCOUNT_ID=self.account_id)
             if self.account_id
             else None
         )
         try:
-            result = self._run([self._npx, "wrangler"] + argv, env)
+            command = [self._npx, "wrangler"] + argv
+            result = (self._run(command, env, cwd=cwd) if cwd is not None
+                      else self._run(command, env))
         except FileNotFoundError:
             raise PublishError(NO_WRANGLER_MESSAGE)
         if result.returncode != 0:
@@ -171,10 +175,14 @@ class Wrangler:
         wrangler's own git-branch inference, since ``directory`` is
         jimemo's own local state directory rather than a git checkout.
         """
+        # Wrangler discovers functions/ relative to cwd, not the static
+        # output argument. Resolve first so relative paths survive the cwd change.
+        directory = Path(directory).resolve()
         return self._invoke(
             ["pages", "deploy", str(directory), "--project-name", project,
              "--branch", branch],
             "pages deploy",
+            cwd=directory,
         )
 
     def pages_project_names(self) -> List[str]:
@@ -332,6 +340,20 @@ class Wrangler:
         """``{"production": is_open, "preview": is_open}`` for the project."""
         return self._open_flags(self._cf_api("GET", project))
 
+    def pages_project_require_functions(self, project: str) -> None:
+        """Refuse unless the production deployment reports a Functions bundle.
+
+        This checks deployment metadata, not the live TOMBSTONES binding.
+        """
+        deployment = self._cf_api("GET", project).get("canonical_deployment")
+        if not isinstance(deployment, dict) or deployment.get("uses_functions") is not True:
+            raise PublishError(
+                f"Pages project {project!r}: production deployment does not confirm "
+                "uses_functions=true; tombstone/purge protection may be absent. "
+                "Check the deployment's Functions bundle and retry "
+                "`jimemo publish setup --assets-only`"
+            )
+
     def pages_project_set_fail_closed(self, project: str) -> None:
         """PATCH fail_open=false on both environments, then re-read and
         verify; a PATCH that does not stick is a PublishError."""
@@ -438,6 +460,9 @@ class MockWrangler:
     def pages_project_fail_open(self, project: str) -> Dict[str, bool]:
         self.calls.append(("pages_project_fail_open", project))
         return dict(self.fail_open)
+
+    def pages_project_require_functions(self, project: str) -> None:
+        self.calls.append(("pages_project_require_functions", project))
 
     def pages_project_set_fail_closed(self, project: str) -> None:
         self.calls.append(("pages_project_set_fail_closed", project))
