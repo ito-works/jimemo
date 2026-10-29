@@ -591,7 +591,7 @@ def test_deploy_discovers_functions_from_deploy_directory(tmp_path, monkeypatch,
     deploy = caller / "deploy dir"
     (deploy / "functions").mkdir(parents=True)
     (deploy / "functions" / "_middleware.js").write_text("tombstone middleware")
-    executable = tmp_path / "mock-npx"
+    executable = tmp_path / "mock-wrangler"
     executable.write_text(
         f"#!{sys.executable}\n"
         "import json, sys\n"
@@ -602,14 +602,20 @@ def test_deploy_discovers_functions_from_deploy_directory(tmp_path, monkeypatch,
     executable.chmod(0o755)
     monkeypatch.chdir(caller)
 
-    result = Wrangler(npx=str(executable)).pages_deploy(
+    from jimemo.publish.wrangler import _run
+
+    def runner(argv, env=None, *, cwd=None):
+        # Keep this cwd regression independent of how Wrangler is selected.
+        return _run([str(executable), *argv[argv.index("pages"):]], env, cwd=cwd)
+
+    result = Wrangler(runner=runner).pages_deploy(
         "my-project", deploy.relative_to(caller) if relative else deploy
     )
 
     output = json.loads(result.stdout)
     assert output["cwd"] == str(deploy)
     assert output["middleware"] == "tombstone middleware"
-    assert output["args"] == ["wrangler", "pages", "deploy", str(deploy),
+    assert output["args"] == ["pages", "deploy", str(deploy),
                               "--project-name", "my-project", "--branch", "main"]
     assert Path.cwd() == caller
 
