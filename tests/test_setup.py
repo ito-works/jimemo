@@ -992,7 +992,7 @@ def test_setup_prints_the_selected_wrangler(tmp_path, monkeypatch, dry_run):
     else:
         _, io, _ = _run_real(tmp_path, monkeypatch, wrangler=wrangler)
     text = io.text()
-    commands = ["pages project create", "pages deploy", "kv namespace create",
+    commands = ["pages deploy", "kv namespace create",
                 "kv key put", "kv key get"]
     if dry_run:
         commands.append("pages project list")
