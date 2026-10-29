@@ -207,8 +207,9 @@ contract in detail.
     (like notes.ito.com) authoritative; jimemo is just a thin wrapper.
   - `wrangler.py` — the `Wrangler` seam: narrow methods
     (`check_available`, `pages_project_names`, `pages_project_create`,
-    `pages_deploy`, `kv_put`, `kv_get`, `kv_list`) wrapping `npx wrangler`
-    subprocess calls, plus three (`curl_version`, `pages_project_fail_open`,
+    `pages_deploy`, `kv_put`, `kv_get`, `kv_list`) wrapping the `wrangler`
+    executable on PATH (overridden by `JIMEMO_WRANGLER`), with no implicit
+    package download, plus three (`curl_version`, `pages_project_fail_open`,
     `pages_project_set_fail_closed`) that reach the Pages project REST API
     through `curl` for the one setting wrangler cannot (`fail_open`), and a
     `MockWrangler` for tests. Auth is never touched by jimemo — wrangler resolves its own
