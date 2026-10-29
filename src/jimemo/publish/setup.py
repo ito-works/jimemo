@@ -45,7 +45,8 @@ Concretely, this wizard:
     KV binding instructions. Wrangler 4.107.0 prompts to create a missing
     project during ``pages deploy --project-name``; that prompt fails in
     jimemo's captured, non-interactive subprocess, so setup now lists
-    projects and runs ``pages project create`` only when needed.
+    projects and creates a classic Pages project through the REST API only
+    when needed (new Wrangler releases redirect the create CLI to Workers).
   - DOES drive ``pages_deploy``, for the initial deploy, against a
     throwaway ALLOWLISTED copy of that state directory -- built via
     cloudflare_backend.py's own ``_build_deploy_dir`` (imported, not
@@ -96,6 +97,7 @@ read alike, and the one command setup actually blocks on (the KV
 namespace create) was easy to miss mid-prose.
 """
 import os
+import shlex
 import tempfile
 from pathlib import Path
 from typing import Optional
@@ -110,7 +112,10 @@ from .cloudflare_backend import (
     require_fail_closed,
 )
 from . import gitsync
-from .wrangler import CURL_TOO_OLD_MESSAGE, FAIL_CLOSED_BODY, MIN_CURL, NO_WRANGLER_MESSAGE
+from .wrangler import (
+    CURL_TOO_OLD_MESSAGE, FAIL_CLOSED_BODY, MIN_CURL, NO_WRANGLER_MESSAGE,
+    PagesProjectExistsError, Wrangler,
+)
 
 DEFAULT_PROJECT_NAME = "jimemo-notes"
 
@@ -190,11 +195,10 @@ def _project_list_argv() -> str:
     return "npx wrangler pages project list --json"
 
 
-def _project_create_argv(project: str) -> str:
-    return (
-        f"npx wrangler pages project create {project} "
-        "--production-branch main"
-    )
+def _project_create_argv(account_id: str, project: str) -> str:
+    return shlex.join(Wrangler(account_id=account_id)._cf_api_argv(
+        "POST", "", Wrangler.pages_project_create_body(project)
+    ))
 
 
 def _fail_closed_argv(account_id: str, project: str) -> str:
@@ -206,17 +210,6 @@ def _fail_closed_argv(account_id: str, project: str) -> str:
         "--expand-header 'Authorization: Bearer {{CLOUDFLARE_API_TOKEN}}' "
         f"-X PATCH -H 'Content-Type: application/json' -d '{FAIL_CLOSED_BODY}' "
         f"https://api.cloudflare.com/client/v4/accounts/{account_id}/pages/projects/{project}"
-    )
-
-
-def _is_existing_pages_project_error(exc: PublishError) -> bool:
-    msg = str(exc)
-    return (
-        "pages project create" in msg
-        and (
-            "code: 8000002" in msg
-            or "A project with this name already exists" in msg
-        )
     )
 
 
@@ -550,19 +543,17 @@ def run_setup(dry_run: bool, wrangler, config_path: Path, io: SetupIO,
         io.print(f"  [dry-run] would run: {_project_list_argv()}")
         io.print(
             "  [dry-run] would create it if missing via: "
-            f"{_project_create_argv(project)}"
+            f"{_project_create_argv(account_id, project)}"
         )
     else:
         project_names = wrangler.pages_project_names()
         if project in project_names:
             io.print(f"  project {project!r} already exists")
         else:
-            io.print(f"  creating project via: {_project_create_argv(project)}")
+            io.print(f"  creating project via: {_project_create_argv(account_id, project)}")
             try:
                 wrangler.pages_project_create(project)
-            except PublishError as exc:
-                if not _is_existing_pages_project_error(exc):
-                    raise
+            except PagesProjectExistsError:
                 io.print(
                     f"  project {project!r} already exists; continuing"
                 )
