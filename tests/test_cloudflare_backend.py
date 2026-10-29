@@ -742,3 +742,15 @@ def test_require_fail_closed_propagates_unreadable_project(tmp_path):
 
 def test_require_fail_closed_passes_when_closed():
     require_fail_closed(MockWrangler(), "friend-notes")
+
+
+def test_publish_refuses_success_without_deployed_functions(tmp_path):
+    class MissingFunctionsWrangler(MockWrangler):
+        def pages_project_require_functions(self, project):
+            raise PublishError("production deployment does not confirm uses_functions=true")
+
+    html = tmp_path / "page.html"
+    html.write_text("<html>hello</html>")
+    publisher = _publisher(tmp_path, wrangler=MissingFunctionsWrangler())
+    with pytest.raises(PublishError, match="uses_functions=true"):
+        publisher.publish(html)
