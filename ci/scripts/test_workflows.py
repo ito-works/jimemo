@@ -455,7 +455,8 @@ class ThisReposGate(unittest.TestCase):
     runs fake gates), so the source repo's `./test-gate.sh` would pass here.
     jimemo's gate is pytest alone: no dependency store, so no warm step."""
 
-    ROW_CMD = '"python3 -m pytest tests -q"'
+    # ci/gate.sh: pytest with its exit 2 reported as 1 (kata jibot-code#qe35).
+    ROW_CMD = '"ci/gate.sh"'
 
     def setUp(self):
         self.text = read("gate.yml")

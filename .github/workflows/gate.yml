@@ -124,13 +124,14 @@ jobs:
           # the bridge parses anyway, and reading it from a workflow expression
           # would mean trusting a field the gate never validated.
           GATE_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}
-        # The registry row's command, verbatim (cell-fleet
-        # ops/repoman/registry/repos.tsv, jimemo). run-gate.sh passes the
-        # job's PATH, with setup-python's interpreter first, through its
-        # `env -i`.
+        # ci/gate.sh is the registry row's pytest run with pytest's exit 2 (a
+        # collection error, a branch defect) reported as 1, so run-gate.sh
+        # bounces it instead of deferring it (kata jibot-code#qe35).
+        # run-gate.sh passes the job's PATH, with setup-python's interpreter
+        # first, through its `env -i`.
         run: |
           ci/run-gate.sh "${{ runner.temp }}/gate-scratch" \
-            "python3 -m pytest tests -q"
+            "ci/gate.sh"
 
       - name: publish the outcome
         # always(): the outcome matters MOST when the gate step failed, and

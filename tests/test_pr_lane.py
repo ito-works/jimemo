@@ -1,6 +1,7 @@
 """The PR-lane machinery under ci/ runs inside the registry gate (kata jibot-code#bden).
 
-The row is `python3 -m pytest tests -q` and stays so; these three tests are how
+The row is `python3 -m pytest tests -q` (gate.yml runs it as ci/gate.sh, which
+reports pytest's exit 2 as 1; kata jibot-code#qe35); these three tests are how
 that row also gates a change to a workflow or to ci/, on both lanes. Each one
 is the exact command jibot-ops's gate runs. The bridge suite is verbatim from
 jibot-ops 8f46f7e and needs nothing beyond the stdlib; the shell suite wants
@@ -94,3 +95,57 @@ def test_gate_ready_describes_the_hosted_runner():
     for stale in ("runner host", "Homebrew", "is 3.9", "mujin-gate"):
         assert stale not in header, stale
     assert "setup-python" in header
+
+
+# ci/gate.sh: the gate command gate.yml runs (kata jibot-code#qe35). pytest's
+# exit 2 is a collection error, a branch defect; run-gate.sh and repoman read
+# 2 as "could not run" and defer it, so the script reports it as 1. A shim
+# python3 stands in for pytest, so this never runs the suite inside itself.
+
+def _gate_with(tmp_path, rc):
+    shim = tmp_path / "bin"
+    shim.mkdir()
+    (shim / "python3").write_text(
+        '#!/bin/sh\necho "$@" > "%s"\nexit %d\n' % (tmp_path / "argv", rc))
+    (shim / "python3").chmod(0o755)
+    proc = subprocess.run(
+        ["env", "-i", "PATH=%s:/usr/bin:/bin" % shim, "HOME=%s" % tmp_path,
+         "/bin/sh", "-c", "ci/gate.sh"],
+        cwd=REPO, capture_output=True, text=True, timeout=60)
+    return proc, (tmp_path / "argv").read_text().strip()
+
+
+@pytest.mark.parametrize("pytest_rc,gate_rc", [(0, 0), (1, 1), (2, 1),
+                                               (4, 4), (5, 5)])
+def test_gate_reports_pytest_exit_2_as_a_failure(tmp_path, pytest_rc, gate_rc):
+    proc, argv = _gate_with(tmp_path, pytest_rc)
+    assert proc.returncode == gate_rc, proc.stderr
+    assert argv == "-m pytest tests -q"
+    assert ("reported as 1" in proc.stderr) == (pytest_rc == 2)
+
+
+def test_gate_runs_from_the_repo_root(tmp_path):
+    # gate.yml and repoman both start at the checkout's root, but the script
+    # must not depend on it: `tests` is relative.
+    shim = tmp_path / "bin"
+    shim.mkdir()
+    (shim / "python3").write_text('#!/bin/sh\npwd -P > "%s"\n'
+                                  % (tmp_path / "cwd"))
+    (shim / "python3").chmod(0o755)
+    proc = subprocess.run(
+        ["env", "-i", "PATH=%s:/usr/bin:/bin" % shim,
+         str(REPO / "ci" / "gate.sh")],
+        cwd=tmp_path, capture_output=True, text=True, timeout=60)
+    assert proc.returncode == 0, proc.stderr
+    assert (tmp_path / "cwd").read_text().strip() == str(REPO.resolve())
+
+
+def test_pytest_still_exits_2_on_a_collection_error(tmp_path):
+    # The premise of ci/gate.sh, measured: a test module that does not import
+    # makes pytest exit 2. If a pytest release changes that, this says so.
+    (tmp_path / "test_broken.py").write_text("import nonexistent_mod_qe35\n")
+    proc = subprocess.run(
+        [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider",
+         str(tmp_path)],
+        cwd=tmp_path, capture_output=True, text=True, timeout=120)
+    assert proc.returncode == 2, proc.stdout[-2000:]
