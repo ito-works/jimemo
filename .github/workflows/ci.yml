@@ -6,15 +6,25 @@ jobs:
   test:
     runs-on: ${{ matrix.os }}
     strategy:
+      # One red leg must not cancel the others: a cancelled leg hides whether
+      # it would have failed for a real reason (jibot-code#qjxq).
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
-        # The exact floor (3.13.6, the oldest interpreter that has all three
-        # html.parser fixes jimemo's checks rely on -- see
-        # src/jimemo/__init__.py) plus what the
-        # fleet actually runs. Pinned to the exact patch, not "3.13": a
-        # floating 3.13 would silently stop testing the floor boundary the
-        # moment setup-python's 3.13 moved, and 3.13.0-3.13.5 are below it.
-        python-version: ["3.13.6", "3.14"]
+        # The newest 3.13 and 3.14 on both runners, plus the exact floor
+        # (3.13.6, the oldest interpreter that has all three html.parser fixes
+        # jimemo's checks rely on -- see src/jimemo/__init__.py) on macOS only.
+        # "3.13" floats to the newest 3.13 release, which is above the floor.
+        # The floor leg stays pinned to the exact patch so it keeps testing the
+        # boundary, but setup-python builds Linux interpreters per Ubuntu
+        # release and has no 3.13.6 for Ubuntu 26.04, which ubuntu-latest
+        # became in November 2026 (jibot-code#qjxq). Its macOS builds do not
+        # depend on the OS release, and html.parser is pure Python, so the
+        # floor tested on macOS is the floor everywhere.
+        python-version: ["3.13", "3.14"]
+        include:
+          - os: macos-latest
+            python-version: "3.13.6"
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0

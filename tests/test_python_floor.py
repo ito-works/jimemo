@@ -81,22 +81,44 @@ def test_install_sh_floor_matches_the_package_constant():
     assert text.count(FLOOR_TEXT) >= 2, text
 
 
-def test_ci_matrix_covers_the_floor_boundary():
-    # The matrix must name the EXACT floor, not a floating "3.13": a
-    # floating minor stops testing the boundary as soon as the runner's
-    # 3.13 moves past it, and 3.13.0-3.13.5 are below the floor.
-    text = CI_YML.read_text(encoding="utf-8")
-    versions = re.search(r"python-version:\s*\[([^\]]*)\]", text)
+def _ci_matrix_versions(text):
+    """Every python-version the ci.yml matrix runs: the matrix list plus
+    each ``include:`` entry's. Read with regexes, as the rest of this file
+    reads its sources, because the test suite imports nothing outside the
+    stdlib."""
+    versions = re.search(r"^\s*python-version:\s*\[([^\]]*)\]", text, re.M)
     assert versions, "ci.yml has no python-version matrix"
-    listed = [v.strip().strip('"\'') for v in versions.group(1).split(",")]
-    assert FLOOR_TEXT in listed, listed
-    for entry in listed:
+    listed = [v.strip().strip("\"'") for v in versions.group(1).split(",")]
+    included = re.findall(
+        r"^\s*(?:-\s+)?python-version:\s*[\"']?([0-9][0-9.]*)[\"']?\s*$", text, re.M
+    )
+    return listed, included
+
+
+def test_ci_matrix_covers_the_floor_boundary():
+    # Some leg must run the EXACT floor, not only a floating "3.13": a
+    # floating minor stops testing the boundary as soon as the runner's 3.13
+    # moves past it, and 3.13.0-3.13.5 are below the floor. The floor may sit
+    # in an `include:` entry: setup-python has no 3.13.6 for Ubuntu 26.04,
+    # so it runs on macOS only (jibot-code#qjxq).
+    text = CI_YML.read_text(encoding="utf-8")
+    listed, included = _ci_matrix_versions(text)
+    assert FLOOR_TEXT in listed + included, (listed, included)
+    for entry in listed + included:
         parts = tuple(int(part) for part in entry.split("."))
-        # A two-component entry ("3.14") is a whole minor series, and is
-        # acceptable only when every release in it is at or above the
-        # floor; a three-component entry is compared outright.
+        # A two-component entry ("3.14") is a whole minor series.
+        # setup-python resolves it to that series' newest release. The
+        # floor's own series ("3.13") is acceptable only because every leg
+        # runs the launcher (`./jimemo doctor`), which refuses an interpreter
+        # below the floor, so a series that resolved low fails loudly. A
+        # three-component entry is compared outright.
         bound = PYTHON_FLOOR[: len(parts)]
         assert parts >= bound, (entry, FLOOR_TEXT)
+    if any(len(entry.split(".")) == 2 and tuple(map(int, entry.split("."))) == PYTHON_FLOOR[:2]
+           for entry in listed + included):
+        assert re.search(r"^\s*- run: \./jimemo doctor\s*$", text, re.M), (
+            "a floating floor-series leg needs ./jimemo doctor to refuse a sub-floor interpreter"
+        )
 
 
 # --- the launcher checks the floor before it imports anything -------------
