@@ -755,7 +755,7 @@ def test_publish_keeps_the_page_when_the_upload_cannot_be_verified(tmp_path, err
     state dir (list() shows it, the next deploy carries it) and the error
     must name its URL."""
     class UnverifiedWrangler(MockWrangler):
-        def pages_project_require_functions(self, project, previous_deployment_id=None):
+        def pages_project_require_functions(self, project, deployment_id):
             raise error
 
     html = tmp_path / "page.html"
@@ -788,12 +788,12 @@ def test_publish_still_rolls_back_when_nothing_was_uploaded(tmp_path):
     assert [p.name for p in (tmp_path / "state").iterdir() if len(p.name) == 24] == []
 
 
-def test_deploy_passes_the_pre_deploy_deployment_id_to_the_check(tmp_path):
+def test_deploy_passes_its_own_deployment_id_to_the_check(tmp_path):
     seen = []
 
     class RecordingWrangler(MockWrangler):
-        def pages_project_require_functions(self, project, previous_deployment_id=None):
-            seen.append(previous_deployment_id)
+        def pages_project_require_functions(self, project, deployment_id):
+            seen.append(deployment_id)
 
     html = tmp_path / "page.html"
     html.write_text("<html>hello</html>")
@@ -801,5 +801,24 @@ def test_deploy_passes_the_pre_deploy_deployment_id_to_the_check(tmp_path):
     publisher.publish(html)
     publisher.publish(html)
 
-    # None before the first deploy, then the id the first deploy produced.
-    assert seen == [None, "deploy-1"]
+    # Each check gets the id of the deployment that same deploy created.
+    assert seen == ["deploy-1", "deploy-2"]
+
+
+def test_deploy_without_a_reported_id_is_unverified_and_keeps_the_page(tmp_path):
+    from subprocess import CompletedProcess
+
+    class NoIdWrangler(MockWrangler):
+        def pages_deploy(self, project, directory, branch="main"):
+            return CompletedProcess([], 0, stdout="", stderr="")
+
+        def pages_project_require_functions(self, project, deployment_id):
+            return Wrangler(account_id="acct-1").pages_project_require_functions(
+                project, deployment_id)
+
+    html = tmp_path / "page.html"
+    html.write_text("<html>hello</html>")
+    publisher = _publisher(tmp_path, wrangler=NoIdWrangler())
+    with pytest.raises(DeployUnverifiedError, match="did not report the id"):
+        publisher.publish(html)
+    assert len([p for p in (tmp_path / "state").iterdir() if len(p.name) == 24]) == 1

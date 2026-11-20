@@ -1,4 +1,5 @@
 import json
+import os
 import sys
 from pathlib import Path
 from subprocess import CompletedProcess
@@ -646,56 +647,121 @@ def _verifying_wrangler(monkeypatch, *results):
 
 
 @pytest.mark.parametrize("deployment", [
-    {"id": "new", "uses_functions": False}, {"id": "new", "uses_functions": "true"},
-    {"id": "new", "uses_functions": 1}, {"id": "new"}])
-def test_functions_check_refuses_a_new_deployment_without_the_bundle(monkeypatch, deployment):
+    {"id": "mine", "uses_functions": False}, {"id": "mine", "uses_functions": "true"},
+    {"id": "mine", "uses_functions": 1}, {"id": "mine"}])
+def test_functions_check_refuses_this_deployment_without_the_bundle(monkeypatch, deployment):
     from jimemo.publish.wrangler import DeployUnverifiedError
 
     w, runner, sleeps = _verifying_wrangler(monkeypatch, _deployment_json(deployment))
     with pytest.raises(DeployUnverifiedError, match="uses_functions=true"):
-        w.pages_project_require_functions("friend-notes", "old")
-    # The new deployment answered: a definite refusal, no waiting.
+        w.pages_project_require_functions("friend-notes", "mine")
+    # This upload's deployment answered: a definite refusal, no waiting.
     assert len(runner.calls) == 1 and sleeps == []
     assert runner.calls[0][-1] == PROJECT_URL
 
 
 @pytest.mark.parametrize("deployment", [
     None, {}, {"uses_functions": True}, {"id": "", "uses_functions": True},
-    # The deployment from BEFORE this upload proves nothing about it.
-    {"id": "old", "uses_functions": True}])
-def test_functions_check_refuses_when_the_upload_never_becomes_production(monkeypatch, deployment):
+    # The deployment from BEFORE this upload proves nothing about it ...
+    {"id": "old", "uses_functions": True},
+    # ... and neither does another machine's concurrent one.
+    {"id": "theirs", "uses_functions": True}])
+def test_functions_check_refuses_when_production_is_not_this_upload(monkeypatch, deployment):
     from jimemo.publish.wrangler import (
         VERIFY_ATTEMPTS, VERIFY_DELAY_S, DeployUnverifiedError)
 
     w, runner, sleeps = _verifying_wrangler(monkeypatch, _deployment_json(deployment))
     with pytest.raises(DeployUnverifiedError, match="uses_functions=true"):
-        w.pages_project_require_functions("friend-notes", "old")
+        w.pages_project_require_functions("friend-notes", "mine")
     assert len(runner.calls) == VERIFY_ATTEMPTS
     assert sleeps == [VERIFY_DELAY_S] * (VERIFY_ATTEMPTS - 1)
 
 
+def test_functions_check_is_not_satisfied_by_another_upload(monkeypatch):
+    """Three ids: A was production, B (someone else's, with Functions)
+    takes over, then this upload C activates WITHOUT Functions. B must not
+    pass the check on C's behalf."""
+    from jimemo.publish.wrangler import DeployUnverifiedError
+
+    a = _deployment_json({"id": "A", "uses_functions": True})
+    b = _deployment_json({"id": "B", "uses_functions": True})
+    c = _deployment_json({"id": "C", "uses_functions": False})
+    w, runner, sleeps = _verifying_wrangler(monkeypatch, a, b, b, c)
+    with pytest.raises(DeployUnverifiedError, match="deployment C does not confirm"):
+        w.pages_project_require_functions("friend-notes", "C")
+    assert len(runner.calls) == 4
+
+
 def test_functions_check_waits_for_delayed_activation(monkeypatch):
     old = _deployment_json({"id": "old", "uses_functions": True})
-    new = _deployment_json({"id": "new", "uses_functions": True})
-    w, runner, sleeps = _verifying_wrangler(monkeypatch, old, old, new)
-    w.pages_project_require_functions("friend-notes", "old")
+    mine = _deployment_json({"id": "mine", "uses_functions": True})
+    w, runner, sleeps = _verifying_wrangler(monkeypatch, old, old, mine)
+    w.pages_project_require_functions("friend-notes", "mine")
     assert len(runner.calls) == 3 and len(sleeps) == 2
 
 
-def test_functions_check_accepts_a_first_production_deployment(monkeypatch):
-    w, runner, sleeps = _verifying_wrangler(
-        monkeypatch, _deployment_json({"id": "first", "uses_functions": True}))
-    w.pages_project_require_functions("friend-notes", None)
-    assert len(runner.calls) == 1 and sleeps == []
+@pytest.mark.parametrize("deployment_id", [None, "", 7])
+def test_functions_check_refuses_without_a_deployment_id(monkeypatch, deployment_id):
+    from jimemo.publish.wrangler import DeployUnverifiedError
+
+    w, runner, _ = _verifying_wrangler(
+        monkeypatch, _deployment_json({"id": "x", "uses_functions": True}))
+    with pytest.raises(DeployUnverifiedError, match="did not report the id"):
+        w.pages_project_require_functions("friend-notes", deployment_id)
+    assert runner.calls == []
 
 
-@pytest.mark.parametrize("deployment,expected", [
-    (None, None), ({}, None), ({"id": ""}, None), ({"id": 7}, None),
-    ({"id": "abc"}, "abc")])
-def test_production_deployment_id(monkeypatch, deployment, expected):
-    w, runner, _ = _verifying_wrangler(monkeypatch, _deployment_json(deployment))
-    assert w.pages_project_production_deployment_id("friend-notes") == expected
-    assert runner.calls[0][-1] == PROJECT_URL
+def _output_writing_wrangler(tmp_path, body):
+    """A mock wrangler that appends ``body`` to WRANGLER_OUTPUT_FILE_PATH,
+    as the real one does, and prints where that file is."""
+    executable = tmp_path / "mock-wrangler"
+    executable.write_text(
+        f"#!{sys.executable}\n"
+        "import os, sys\n"
+        "path = os.environ['WRANGLER_OUTPUT_FILE_PATH']\n"
+        f"open(path, 'a').write({body!r})\n"
+        "print(path)\n"
+    )
+    executable.chmod(0o755)
+    return Wrangler(executable=str(executable))
+
+
+def test_pages_deploy_reads_the_deployment_id_wrangler_reports(tmp_path):
+    body = (
+        'not json\n'
+        '{"type": "wrangler-session", "deployment_id": "no"}\n'
+        '{"type": "pages-deploy", "deployment_id": "dep-123", "url": "u"}\n'
+        '{"type": "pages-deploy-detailed", "deployment_id": "other"}\n'
+    )
+    deploy = tmp_path / "deploy"
+    deploy.mkdir()
+    result = _output_writing_wrangler(tmp_path, body).pages_deploy("p", deploy)
+
+    assert result.deployment_id == "dep-123"
+    out_file = Path(result.stdout.strip())
+    # Outside the deployed tree, and gone once the deploy returns.
+    assert deploy.resolve() not in out_file.resolve().parents
+    assert not out_file.exists()
+
+
+@pytest.mark.parametrize("body", [
+    "", "garbage\n", '{"type": "pages-deploy"}\n',
+    '{"type": "pages-deploy", "deployment_id": ""}\n',
+    '{"type": "pages-deploy", "deployment_id": 5}\n', '[1]\n'])
+def test_pages_deploy_reports_no_id_when_wrangler_wrote_none(tmp_path, body):
+    deploy = tmp_path / "deploy"
+    deploy.mkdir()
+    result = _output_writing_wrangler(tmp_path, body).pages_deploy("p", deploy)
+    assert result.deployment_id is None
+
+
+def test_pages_deploy_env_adds_only_the_output_path(tmp_path):
+    runner = FakeRunner(CompletedProcess([], 0, stdout="", stderr=""))
+    Wrangler(runner=runner, account_id="acct-9").pages_deploy("p", tmp_path)
+    env, = runner.envs
+    added = {k: v for k, v in env.items() if os.environ.get(k) != v}
+    assert set(added) == {"WRANGLER_OUTPUT_FILE_PATH", "CLOUDFLARE_ACCOUNT_ID"}
+    assert added["CLOUDFLARE_ACCOUNT_ID"] == "acct-9"
 
 
 @pytest.mark.parametrize("stdout,code,match", [

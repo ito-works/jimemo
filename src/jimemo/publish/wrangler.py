@@ -37,6 +37,7 @@ import os
 import re
 import shutil
 import subprocess
+import tempfile
 import time
 from pathlib import Path
 from subprocess import CompletedProcess
@@ -98,7 +99,7 @@ def _run(argv: List[str], env: Optional[Dict[str, str]] = None,
 
 #: Post-deploy confirmation (pages_project_require_functions): how many
 #: times the project is read, and the pause between reads, while waiting
-#: for this upload to become the production deployment.
+#: for the deployment this upload created to become the production one.
 VERIFY_ATTEMPTS = 10
 VERIFY_DELAY_S = 3.0
 
@@ -107,6 +108,28 @@ class DeployUnverifiedError(PublishError):
     """The upload ran, but the new production deployment could not be
     confirmed to carry the Functions bundle. Unlike every other
     PublishError from a deploy, the uploaded tree may be live."""
+
+
+def _deployment_id_from_output(path: Path) -> Optional[str]:
+    """The ``deployment_id`` of the last ``pages-deploy`` entry in the
+    newline-delimited JSON file wrangler appends to when
+    ``WRANGLER_OUTPUT_FILE_PATH`` is set, or None when there is no such
+    entry (file missing, unreadable, not JSON, or no usable id)."""
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except (OSError, ValueError):
+        return None
+    found = None
+    for line in lines:
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(entry, dict) and entry.get("type") == "pages-deploy":
+            dep_id = entry.get("deployment_id")
+            if isinstance(dep_id, str) and dep_id:
+                found = dep_id
+    return found
 
 
 class PagesProjectExistsError(PublishError):
@@ -178,12 +201,15 @@ class Wrangler:
         return shutil.which(self.executable) is not None
 
     def _invoke(self, argv: List[str], action: str,
-                *, cwd: Optional[Path] = None) -> CompletedProcess:
-        env = (
-            dict(os.environ, CLOUDFLARE_ACCOUNT_ID=self.account_id)
-            if self.account_id
-            else None
-        )
+                *, cwd: Optional[Path] = None,
+                extra_env: Optional[Dict[str, str]] = None) -> CompletedProcess:
+        extra = dict(extra_env or {})
+        if self.account_id:
+            extra["CLOUDFLARE_ACCOUNT_ID"] = self.account_id
+        # None means "inherit unchanged"; otherwise the inherited
+        # environment is copied whole with these non-secret names layered
+        # on top. No value in it is read here.
+        env = dict(os.environ, **extra) if extra else None
         try:
             command = [self.executable] + argv
             result = (self._run(command, env, cwd=cwd) if cwd is not None
@@ -205,16 +231,28 @@ class Wrangler:
         Cloudflare Pages production branch) -- explicit, not left to
         wrangler's own git-branch inference, since ``directory`` is
         jimemo's own local state directory rather than a git checkout.
+
+        The returned CompletedProcess carries one extra attribute,
+        ``deployment_id``: the id of the deployment this upload created,
+        as wrangler itself reports it (it appends a ``pages-deploy``
+        record to the file ``WRANGLER_OUTPUT_FILE_PATH`` names), or None
+        when wrangler wrote no such record. The file lives in its own
+        throwaway directory, outside the deployed tree.
         """
         # Wrangler discovers functions/ relative to cwd, not the static
         # output argument. Resolve first so relative paths survive the cwd change.
         directory = Path(directory).resolve()
-        return self._invoke(
-            ["pages", "deploy", str(directory), "--project-name", project,
-             "--branch", branch],
-            "pages deploy",
-            cwd=directory,
-        )
+        with tempfile.TemporaryDirectory(prefix="jimemo-wrangler-out-") as out_dir:
+            out_file = Path(out_dir) / "output.ndjson"
+            result = self._invoke(
+                ["pages", "deploy", str(directory), "--project-name", project,
+                 "--branch", branch],
+                "pages deploy",
+                cwd=directory,
+                extra_env={"WRANGLER_OUTPUT_FILE_PATH": str(out_file)},
+            )
+            result.deployment_id = _deployment_id_from_output(out_file)
+        return result
 
     def pages_project_names(self) -> List[str]:
         """Return the names of the account's Cloudflare Pages projects.
@@ -381,40 +419,42 @@ class Wrangler:
         deployment = self._cf_api("GET", project).get("canonical_deployment")
         return deployment if isinstance(deployment, dict) else {}
 
-    def pages_project_production_deployment_id(self, project: str) -> Optional[str]:
-        """Id of the current production deployment, or None when there is
-        none. Read BEFORE a deploy so pages_project_require_functions can
-        tell this upload from the deployment it replaces."""
-        dep_id = self._production_deployment(project).get("id")
-        return dep_id if isinstance(dep_id, str) and dep_id else None
-
     def pages_project_require_functions(
-        self, project: str, previous_deployment_id: Optional[str] = None
+        self, project: str, deployment_id: Optional[str]
     ) -> None:
-        """Refuse unless THIS upload became the production deployment and
-        reports a Functions bundle.
+        """Refuse unless the deployment THIS upload created is the
+        production deployment and reports a Functions bundle.
 
-        ``previous_deployment_id`` is what
-        pages_project_production_deployment_id returned before the deploy
-        (None: there was no production deployment). A production
-        deployment with a different id is the new one; the old one
-        reporting uses_functions=true proves nothing about this upload, so
-        the project is re-read up to VERIFY_ATTEMPTS times until the id
-        changes. Raises DeployUnverifiedError when the new deployment does
-        not report uses_functions=true, or never shows up.
+        ``deployment_id`` is ``pages_deploy(...).deployment_id``. The
+        project's production deployment must carry exactly that id before
+        its ``uses_functions`` is believed: an earlier deployment, or
+        another machine's concurrent one, reporting true proves nothing
+        about this upload. The project is re-read up to VERIFY_ATTEMPTS
+        times while production is some other deployment. Raises
+        DeployUnverifiedError when wrangler reported no id, when this
+        deployment does not report uses_functions=true, or when it is not
+        the production deployment by the last read (not yet active, or
+        already replaced by a later upload).
 
         This checks deployment metadata, not the live TOMBSTONES binding.
         """
+        if not (isinstance(deployment_id, str) and deployment_id):
+            raise DeployUnverifiedError(
+                f"Pages project {project!r}: wrangler did not report the id of "
+                "the deployment it created, so uses_functions=true cannot be "
+                "confirmed for this upload; tombstone/purge protection may be "
+                "absent. Check the project's deployments and retry "
+                "`jimemo publish setup --assets-only`"
+            )
         seen = "the project reports no production deployment"
         for attempt in range(VERIFY_ATTEMPTS):
             if attempt:
                 self._sleep(VERIFY_DELAY_S)
             deployment = self._production_deployment(project)
             dep_id = deployment.get("id")
-            if not (isinstance(dep_id, str) and dep_id):
-                continue
-            if dep_id == previous_deployment_id:
-                seen = f"production is still the earlier deployment {dep_id}"
+            if dep_id != deployment_id:
+                if isinstance(dep_id, str) and dep_id:
+                    seen = f"production is deployment {dep_id}"
                 continue
             if deployment.get("uses_functions") is True:
                 return
@@ -426,9 +466,10 @@ class Wrangler:
             )
         raise DeployUnverifiedError(
             f"Pages project {project!r}: could not confirm uses_functions=true "
-            f"for this upload: after {VERIFY_ATTEMPTS} reads {seen}. "
-            "Tombstone/purge protection may be absent; check the project's "
-            "deployments and retry `jimemo publish setup --assets-only`"
+            f"for this upload (deployment {deployment_id}): after "
+            f"{VERIFY_ATTEMPTS} reads {seen}. Tombstone/purge protection may be "
+            "absent; check the project's deployments and retry "
+            "`jimemo publish setup --assets-only`"
         )
 
     def pages_project_set_fail_closed(self, project: str) -> None:
@@ -519,7 +560,9 @@ class MockWrangler:
     ) -> CompletedProcess:
         self.calls.append(("pages_deploy", project, str(directory), branch))
         self._deploys += 1
-        return CompletedProcess([], 0, stdout=self._deploy_stdout, stderr="")
+        result = CompletedProcess([], 0, stdout=self._deploy_stdout, stderr="")
+        result.deployment_id = f"deploy-{self._deploys}"
+        return result
 
     def pages_project_names(self) -> List[str]:
         self.calls.append(("pages_project_names",))
@@ -542,12 +585,8 @@ class MockWrangler:
         self.calls.append(("pages_project_fail_open", project))
         return dict(self.fail_open)
 
-    def pages_project_production_deployment_id(self, project: str) -> Optional[str]:
-        self.calls.append(("pages_project_production_deployment_id", project))
-        return f"deploy-{self._deploys}" if self._deploys else None
-
     def pages_project_require_functions(
-        self, project: str, previous_deployment_id: Optional[str] = None
+        self, project: str, deployment_id: Optional[str]
     ) -> None:
         self.calls.append(("pages_project_require_functions", project))
 
