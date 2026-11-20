@@ -305,6 +305,7 @@ def test_real_run_creates_kv_and_deploys_in_expected_order(tmp_path, monkeypatch
     assert [c[0] for c in wrangler.calls] == [
         "check_available", "curl_version", "pages_project_names", "pages_project_create",
         "pages_project_set_fail_closed", "pages_project_fail_open",
+        "pages_project_production_deployment_id",
         "pages_deploy", "pages_project_require_functions", "kv_put", "kv_get",
     ]
 
@@ -978,7 +979,7 @@ def test_setup_dry_run_argv_matches_the_seam():
 
 def test_setup_refuses_success_without_deployed_functions(tmp_path, monkeypatch):
     class MissingFunctionsWrangler(MockWrangler):
-        def pages_project_require_functions(self, project):
+        def pages_project_require_functions(self, project, previous_deployment_id=None):
             raise PublishError("production deployment does not confirm uses_functions=true")
 
     with pytest.raises(PublishError, match="uses_functions=true"):

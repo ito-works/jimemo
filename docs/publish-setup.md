@@ -170,8 +170,10 @@ automatically, mirroring notes.ito.com's model and ordering:
      copy of the repo's `publish/cloudflare/` template (see "Single-
      machine limitation" above for why this directory matters),
    - deploy that directory to the Pages project,
-   - require the production deployment to report `uses_functions: true`
-     through the Pages API (also checked after every publish/gc deploy),
+   - require that upload to become the production deployment and report
+     `uses_functions: true` through the Pages API (also checked after
+     every publish/gc deploy; a refusal here means the upload ran, so the
+     error names the page URL and the page stays in the state directory),
    - run a best-effort KV round-trip check,
    - write `~/.jimemo/config.toml` (no token in it -- see below).
 

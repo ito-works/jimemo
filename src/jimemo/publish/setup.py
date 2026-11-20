@@ -109,6 +109,7 @@ from .cloudflare_backend import (
     _build_deploy_dir,
     _default_state_dir,
     _install_state_dir_assets,
+    deploy_and_verify,
     require_fail_closed,
 )
 from . import gitsync
@@ -626,7 +627,7 @@ def run_setup(dry_run: bool, wrangler, config_path: Path, io: SetupIO,
             "other synced strays excluded) via: "
             f"{_deploy_argv(project, '<allowlisted-copy>', wrangler.executable)}"
         )
-        io.print("  [dry-run] would require the production deployment to report uses_functions=true via the Pages API")
+        io.print("  [dry-run] would require this upload to become the production deployment and report uses_functions=true via the Pages API")
     else:
         # Never deploy state_dir directly -- the SAME allowlist
         # publish()/gc() use, via the shared helper, so a friend re-
@@ -648,8 +649,7 @@ def run_setup(dry_run: bool, wrangler, config_path: Path, io: SetupIO,
             # PATCH response alone, re-read the project first.
             require_fail_closed(wrangler, project)
             io.print(f"  running: {_deploy_argv(project, deploy_dir, wrangler.executable)}")
-            wrangler.pages_deploy(project, deploy_dir)
-            wrangler.pages_project_require_functions(project)
+            deploy_and_verify(wrangler, project, deploy_dir)
 
     _post_deploy_binding_check(wrangler, kv_namespace_id, base_url, io, dry_run)
 
