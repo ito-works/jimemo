@@ -433,9 +433,11 @@ def _ensure_kv_binding(wrangler, project: str, io: SetupIO) -> Optional[str]:
     API. Returns the bound namespace id, or None when a call was refused:
     the caller then prints the manual steps and asks for the id.
 
-    A project whose production environment already binds TOMBSTONES
-    keeps that namespace (its tombstones live there); when preview binds
-    the same id too, nothing is changed at all. A binding PATCH that
+    A project where one environment already binds TOMBSTONES keeps that
+    namespace (its tombstones live there) and the other environment is
+    bound to it; when both bind the same id, nothing is changed at all;
+    when they bind different ids, setup refuses (KVBindingError) rather
+    than drop either store's tombstones. A binding PATCH that
     answers success but reads back wrong raises KVBindingError -- a
     refusal, never a fallback."""
     title = _kv_title(project)
@@ -450,10 +452,24 @@ def _ensure_kv_binding(wrangler, project: str, io: SetupIO) -> Optional[str]:
                 f"{production} on production and preview; nothing to change"
             )
             return production
-        if production:
-            known = production
+        if production and preview:
+            # Two stores, each possibly holding tombstones the other
+            # lacks. Picking either one would un-purge pages on the
+            # other environment, so this is a refusal, not a choice.
+            raise KVBindingError(
+                f"production binds {KV_BINDING_NAME} to KV namespace "
+                f"{production} and preview binds it to {preview}. Setup "
+                "will not pick one: rebinding either environment would "
+                "drop the tombstones only its current namespace holds. "
+                "Copy the keys you need into one namespace, bind both "
+                "environments to it in the Pages project's Settings -> "
+                "Functions -> KV namespace bindings, and re-run setup."
+            )
+        if production or preview:
+            known = production or preview
+            where = "production" if production else "preview"
             io.print(
-                f"  production already binds {KV_BINDING_NAME} to {production}; "
+                f"  {where} already binds {KV_BINDING_NAME} to {known}; "
                 "keeping that namespace (its tombstones live there)"
             )
         else:

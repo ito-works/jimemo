@@ -171,8 +171,11 @@ automatically, mirroring notes.ito.com's model and ordering:
      other `deployment_configs` setting was dropped or changed,
    - on a re-run against a project that already binds `TOMBSTONES` on
      both environments, change nothing and keep that namespace (its
-     tombstones live there); if only production binds it, keep
-     production's namespace and bind preview to it too,
+     tombstones live there); if only one environment binds it, keep
+     that namespace and bind the other environment to it too; if the
+     two environments bind different namespaces, refuse and change
+     nothing, because either choice would drop the tombstones only the
+     other namespace holds,
    - if Cloudflare refuses any of those calls, say which one, then fall
      back to the manual steps: print
      `wrangler kv namespace create <project>-tombstones` (using your
