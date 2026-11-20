@@ -132,6 +132,16 @@ def _deployment_id_from_output(path: Path) -> Optional[str]:
     return found
 
 
+#: The line wrangler prints once the Pages deployment exists, before it
+#: appends its ``pages-deploy`` record to WRANGLER_OUTPUT_FILE_PATH.
+DEPLOY_COMPLETE_MARKER = "Deployment complete"
+
+
+def _failure_text(action: str, result: CompletedProcess) -> str:
+    stderr = (result.stderr or "").strip()
+    return f"wrangler {action} failed (exit {result.returncode}): {stderr}"
+
+
 class PagesProjectExistsError(PublishError):
     """The Pages create endpoint reports duplicate project code 8000002."""
 
@@ -202,7 +212,8 @@ class Wrangler:
 
     def _invoke(self, argv: List[str], action: str,
                 *, cwd: Optional[Path] = None,
-                extra_env: Optional[Dict[str, str]] = None) -> CompletedProcess:
+                extra_env: Optional[Dict[str, str]] = None,
+                check: bool = True) -> CompletedProcess:
         extra = dict(extra_env or {})
         if self.account_id:
             extra["CLOUDFLARE_ACCOUNT_ID"] = self.account_id
@@ -216,11 +227,8 @@ class Wrangler:
                       else self._run(command, env))
         except OSError:
             raise PublishError(NO_WRANGLER_MESSAGE)
-        if result.returncode != 0:
-            stderr = (result.stderr or "").strip()
-            raise PublishError(
-                f"wrangler {action} failed (exit {result.returncode}): {stderr}"
-            )
+        if check and result.returncode != 0:
+            raise PublishError(_failure_text(action, result))
         return result
 
     def pages_deploy(
@@ -238,6 +246,16 @@ class Wrangler:
         record to the file ``WRANGLER_OUTPUT_FILE_PATH`` names), or None
         when wrangler wrote no such record. The file lives in its own
         throwaway directory, outside the deployed tree.
+
+        A nonzero exit is classified by what wrangler left behind
+        (jimemo#cf0d). A ``pages-deploy`` record, or wrangler's own
+        "Deployment complete" line, proves the deployment was created, so
+        the failure came after the upload (a failed write of that record,
+        for one) and raises DeployUnverifiedError: the page may be live.
+        With neither, it raises a plain PublishError, read as a failure
+        before the upload: auth, network, a missing project and a failed
+        file upload all exit before wrangler creates the deployment, and
+        each writes no record and prints no completion line.
         """
         # Wrangler discovers functions/ relative to cwd, not the static
         # output argument. Resolve first so relative paths survive the cwd change.
@@ -250,8 +268,20 @@ class Wrangler:
                 "pages deploy",
                 cwd=directory,
                 extra_env={"WRANGLER_OUTPUT_FILE_PATH": str(out_file)},
+                check=False,
             )
             result.deployment_id = _deployment_id_from_output(out_file)
+        if result.returncode != 0:
+            failure = _failure_text("pages deploy", result)
+            output = f"{result.stdout or ''}\n{result.stderr or ''}"
+            if result.deployment_id or DEPLOY_COMPLETE_MARKER in output:
+                created = (f"deployment {result.deployment_id}"
+                           if result.deployment_id else "a deployment")
+                raise DeployUnverifiedError(
+                    f"{failure}; wrangler had already created {created}, "
+                    "so the upload ran"
+                )
+            raise PublishError(failure)
         return result
 
     def pages_project_names(self) -> List[str]:

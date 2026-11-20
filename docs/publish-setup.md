@@ -173,7 +173,11 @@ automatically, mirroring notes.ito.com's model and ordering:
    - require the deployment that upload created to be the production one
      and report `uses_functions: true` through the Pages API (also checked after
      every publish/gc deploy; a refusal here means the upload ran, so the
-     error names the page URL and the page stays in the state directory),
+     error names the page URL and the page stays in the state directory;
+     so does a wrangler exit that is nonzero after it wrote its
+     deployment record or printed "Deployment complete", while a nonzero
+     exit with neither is read as a failure before the upload and the
+     staged page is removed),
    - run a best-effort KV round-trip check,
    - write `~/.jimemo/config.toml` (no token in it -- see below).
 
