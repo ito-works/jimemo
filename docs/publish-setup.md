@@ -18,7 +18,8 @@ The wizard's Cloudflare calls go through a narrow seam
 (`curl_version`, `pages_project_fail_open`, `pages_project_set_fail_closed`)
 that reach the Pages project REST API through `curl`, because wrangler has
 no subcommand for `fail_open`. `pages_project_create` also uses this REST
-path: Wrangler 4.153.0 redirects its create command to Workers, while
+path: Wrangler 4.153.0 redirects its create command to a Workers deploy
+of the current directory when it detects an agent session, while
 `POST /accounts/{id}/pages/projects` creates a classic Pages project
 with `name` and `production_branch` across Wrangler versions. It does not create a Cloudflare
 account, create a KV namespace, or bind a KV namespace to a Pages
