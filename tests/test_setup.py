@@ -820,8 +820,11 @@ def test_completion_message_shows_a_working_render_then_publish_example(tmp_path
 
 def test_kv_create_is_a_standout_user_run_command(tmp_path, monkeypatch):
     # Only the fallback path asks the human to run it.
+    class W(DashboardBindsOnPromptMixin, RefusingKVCreateWrangler):
+        dashboard_binding = ("ns123", "ns123")
+
     wrangler, io, cfg_path = _run_real(
-        tmp_path, monkeypatch, wrangler=RefusingKVCreateWrangler(),
+        tmp_path, monkeypatch, wrangler=W(),
         prompts=["friend-notes", "acct123", "ns123"])
 
     text = io.text()
@@ -1056,6 +1059,42 @@ class MisboundWrangler(MockWrangler):
             "reads back wrong -- preview: TOMBSTONES is not bound")
 
 
+class DashboardBindsOnPromptMixin:
+    """Stands in for the human doing step (b): the binding appears in the
+    project once the wizard has asked for the namespace id."""
+
+    dashboard_binding = None  # (production_id, preview_id) after the prompt
+    _reads = 0
+
+    def pages_project_kv_binding(self, project, binding):
+        self._reads += 1
+        if self._reads > 1 and self.dashboard_binding is not None:
+            prod, prev = self.dashboard_binding
+            if prod:
+                self.kv_bindings["production"][binding] = prod
+            if prev:
+                self.kv_bindings["preview"][binding] = prev
+        return super().pages_project_kv_binding(project, binding)
+
+
+class RefusingKVCreateDashboard(DashboardBindsOnPromptMixin, RefusingKVCreateWrangler):
+    dashboard_binding = ("ns-typed", "ns-typed")
+
+
+class RefusingBindDashboard(DashboardBindsOnPromptMixin, RefusingBindWrangler):
+    dashboard_binding = ("ns-1", "ns-1")
+
+
+class ReadBackFailsAfterPatchWrangler(MockWrangler):
+    """The PATCH answered success; the read-back GET then fails."""
+
+    def pages_project_bind_kv(self, project, binding, namespace_id):
+        self.calls.append(("pages_project_bind_kv", project, binding, namespace_id))
+        raise KVBindingError(
+            "Pages project 'friend-notes': bound TOMBSTONES but could not read "
+            "the project back: timed out")
+
+
 def test_real_run_asks_for_project_name_and_account_id_only(tmp_path, monkeypatch):
     wrangler, io, cfg_path = _run_real(tmp_path, monkeypatch)
 
@@ -1129,7 +1168,7 @@ def test_read_back_refusal_makes_no_deploy(tmp_path, monkeypatch):
 
 def test_refused_create_falls_back_to_the_manual_steps(tmp_path, monkeypatch):
     wrangler, io, cfg_path = _run_real(
-        tmp_path, monkeypatch, wrangler=RefusingKVCreateWrangler(),
+        tmp_path, monkeypatch, wrangler=RefusingKVCreateDashboard(),
         prompts=["friend-notes", "acct123", "ns-typed"])
 
     text = io.text()
@@ -1144,7 +1183,7 @@ def test_refused_create_falls_back_to_the_manual_steps(tmp_path, monkeypatch):
 
 def test_refused_bind_falls_back_and_names_the_created_namespace(tmp_path, monkeypatch):
     wrangler, io, cfg_path = _run_real(
-        tmp_path, monkeypatch, wrangler=RefusingBindWrangler(),
+        tmp_path, monkeypatch, wrangler=RefusingBindDashboard(),
         prompts=["friend-notes", "acct123", "ns-1"])
 
     text = io.text()
@@ -1153,6 +1192,88 @@ def test_refused_bind_falls_back_and_names_the_created_namespace(tmp_path, monke
     assert "ACTION REQUIRED" in text
     assert "ns-1" in text
     assert load_config(cfg_path).publish.cloudflare.kv_namespace_id == "ns-1"
+
+
+def test_read_back_failure_after_patch_is_fatal_not_a_fallback(tmp_path, monkeypatch):
+    wrangler = ReadBackFailsAfterPatchWrangler()
+    with pytest.raises(KVBindingError, match="could not read"):
+        _run_real(tmp_path, monkeypatch, wrangler=wrangler)
+    assert not any(c[0] == "pages_deploy" for c in wrangler.calls)
+    assert not (tmp_path / "config.toml").exists()
+
+
+@pytest.mark.parametrize("dashboard,match", [
+    (None, "production: TOMBSTONES is not bound"),
+    (("ns-typed", None), "preview: TOMBSTONES is not bound"),
+    (("ns-other", "ns-typed"), "production: TOMBSTONES is bound to ns-other"),
+])
+def test_fallback_refuses_a_missing_or_mismatched_manual_binding(
+        tmp_path, monkeypatch, dashboard, match):
+    # The manual path gets the same read-back: a skipped dashboard step,
+    # a misnamed binding, or another namespace stops setup before deploy.
+    class W(DashboardBindsOnPromptMixin, RefusingKVCreateWrangler):
+        dashboard_binding = dashboard
+
+    wrangler = W()
+    with pytest.raises(KVBindingError, match=match):
+        _run_real(tmp_path, monkeypatch, wrangler=wrangler,
+                  prompts=["friend-notes", "acct123", "ns-typed"], confirms=[False])
+    assert not any(c[0] == "pages_deploy" for c in wrangler.calls)
+    assert not (tmp_path / "config.toml").exists()
+
+
+def test_fallback_misnamed_manual_binding_is_refused(tmp_path, monkeypatch):
+    class W(RefusingKVCreateWrangler):
+        _reads = 0
+
+        def pages_project_kv_binding(self, project, binding):
+            self._reads += 1
+            if self._reads > 1:
+                for env in ("production", "preview"):
+                    self.kv_bindings[env]["tombstones"] = "ns-typed"
+            return super().pages_project_kv_binding(project, binding)
+
+    with pytest.raises(KVBindingError, match="not bound"):
+        _run_real(tmp_path, monkeypatch, wrangler=W(),
+                  prompts=["friend-notes", "acct123", "ns-typed"], confirms=[False])
+
+
+def test_fallback_rechecks_after_the_user_binds_in_the_dashboard(tmp_path, monkeypatch):
+    # The first check finds nothing; the user binds it and asks to
+    # re-check; setup then continues.
+    class W(RefusingKVCreateWrangler):
+        _reads = 0
+
+        def pages_project_kv_binding(self, project, binding):
+            self._reads += 1
+            if self._reads > 2:
+                for env in ("production", "preview"):
+                    self.kv_bindings[env][binding] = "ns-typed"
+            return super().pages_project_kv_binding(project, binding)
+
+    wrangler, io, cfg_path = _run_real(
+        tmp_path, monkeypatch, wrangler=W(),
+        prompts=["friend-notes", "acct123", "ns-typed"], confirms=[True])
+    assert "not bound" in io.text()
+    assert any(c[0] == "pages_deploy" for c in wrangler.calls)
+    assert load_config(cfg_path).publish.cloudflare.kv_namespace_id == "ns-typed"
+
+
+def test_fallback_binding_read_failure_is_fatal(tmp_path, monkeypatch):
+    class W(RefusingKVCreateWrangler):
+        _reads = 0
+
+        def pages_project_kv_binding(self, project, binding):
+            self._reads += 1
+            if self._reads > 1:
+                raise PublishError("Pages project API GET timed out")
+            return super().pages_project_kv_binding(project, binding)
+
+    wrangler = W()
+    with pytest.raises(PublishError, match="timed out"):
+        _run_real(tmp_path, monkeypatch, wrangler=wrangler,
+                  prompts=["friend-notes", "acct123", "ns-typed"])
+    assert not any(c[0] == "pages_deploy" for c in wrangler.calls)
 
 
 def test_dry_run_prints_the_namespace_create_and_bind_calls(tmp_path):

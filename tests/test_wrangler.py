@@ -1029,6 +1029,59 @@ def test_kv_namespace_find_pages_through_every_page(monkeypatch):
         f"{KV_URL}?per_page=100&page=1", f"{KV_URL}?per_page=100&page=2"]
 
 
+def _kv_page_documented(namespaces, page, total_count, per_page=100):
+    # The documented result_info: count, page, per_page, total_count --
+    # no total_pages.
+    return _ok(json.dumps({"success": True, "errors": [], "result": namespaces,
+                           "result_info": {"count": len(namespaces), "page": page,
+                                           "per_page": per_page,
+                                           "total_count": total_count}}))
+
+
+def test_kv_namespace_find_pages_without_total_pages(monkeypatch):
+    # Review finding (jimemo#1wa9 round 1): result_info need not carry
+    # total_pages; a namespace past the first 100 must still be found.
+    first = [{"id": f"id-{i}", "title": f"t-{i}"} for i in range(100)]
+    w, runner = _wrangler_with_token(
+        monkeypatch,
+        _kv_page_documented(first, page=1, total_count=101),
+        _kv_page_documented([{"id": "ns-101", "title": "friend-notes-tombstones"}],
+                            page=2, total_count=101),
+    )
+
+    assert w.kv_namespace_find("friend-notes-tombstones") == "ns-101"
+    assert len(runner.calls) == 2
+
+
+def test_kv_namespace_find_pages_with_no_result_info(monkeypatch):
+    # No pagination metadata at all: a full page means "ask for the next".
+    first = [{"id": f"id-{i}", "title": f"t-{i}"} for i in range(100)]
+    bare = lambda items: _ok(json.dumps({"success": True, "errors": [], "result": items}))
+    w, runner = _wrangler_with_token(
+        monkeypatch, bare(first), bare([{"id": "ns-x", "title": "friend-notes-tombstones"}]))
+
+    assert w.kv_namespace_find("friend-notes-tombstones") == "ns-x"
+    assert len(runner.calls) == 2
+
+
+def test_kv_namespace_find_stops_at_a_short_page(monkeypatch):
+    w, runner = _wrangler_with_token(
+        monkeypatch, _kv_page_documented([{"id": "a", "title": "x"}], page=1, total_count=1))
+    assert w.kv_namespace_find("friend-notes-tombstones") is None
+    assert len(runner.calls) == 1
+
+
+def test_bind_kv_read_back_failure_is_a_binding_error(monkeypatch):
+    # A PATCH that answered success followed by a read-back that cannot
+    # be made is a refusal, never the manual fallback.
+    from jimemo.publish.wrangler import KVBindingError
+    w, _ = _wrangler_with_token(
+        monkeypatch, _configs_json({}, {}), _configs_json({}, {}), _ok("not json"))
+
+    with pytest.raises(KVBindingError, match="could not read"):
+        w.pages_project_bind_kv("friend-notes", "TOMBSTONES", "ns-1")
+
+
 def test_kv_namespace_find_returns_none_when_absent(monkeypatch):
     w, _ = _wrangler_with_token(monkeypatch, _kv_page([{"id": "a", "title": "x"}]))
     assert w.kv_namespace_find("friend-notes-tombstones") is None

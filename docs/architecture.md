@@ -243,7 +243,9 @@ contract in detail.
     `pages_project_bind_kv`, which reads the project back and refuses a
     missing or misnamed binding), deploys, and writes
     `~/.jimemo/config.toml` — never the API token. A refused API call
-    falls back to the manual steps. Full walkthrough: `docs/publish-setup.md`.
+    falls back to the manual steps, which get the same read-back
+    (`_verify_manual_binding`) before any deploy; a read-back that cannot
+    be made after a successful PATCH is a refusal, not a fallback. Full walkthrough: `docs/publish-setup.md`.
 - `publish/cloudflare/` (repo root, distinct from `src/jimemo/publish/`)
   — `_middleware.js`, `_headers`, `index.html`: the Cloudflare Pages
   Functions bundle the `cloudflare` backend deploys. `_middleware.js` is

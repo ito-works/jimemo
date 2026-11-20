@@ -317,9 +317,11 @@ def _print_kv_instructions(io: SetupIO, project: str, executable: str = "wrangle
         "\n"
         "ACTION REQUIRED -- Cloudflare KV namespace + binding. These two "
         "steps are\n"
-        "yours to do (setup could not make the API calls itself), and setup "
+        "yours to do (setup could not make the API calls itself). Setup "
         "waits for\n"
-        "step (a)'s id before continuing:\n"
+        "step (a)'s id, then reads the project back and will not deploy "
+        "until step (b)\n"
+        "shows up on production and preview:\n"
         "\n"
         "  a. Create a KV namespace, if you don't have one for this "
         "project yet."
@@ -487,6 +489,49 @@ def _ensure_kv_binding(wrangler, project: str, io: SetupIO) -> Optional[str]:
         "(read back from the project)"
     )
     return known
+
+
+def _binding_problems(found: dict, namespace_id: str) -> list:
+    """What is wrong with ``found`` (env -> bound id or None) for a
+    TOMBSTONES binding to ``namespace_id`` on both environments."""
+    problems = []
+    for env in ("production", "preview"):
+        bound = found.get(env)
+        if bound != namespace_id:
+            problems.append(
+                f"{env}: {KV_BINDING_NAME} is "
+                + (f"bound to {bound}" if bound else "not bound")
+                + f" (expected {namespace_id})"
+            )
+    return problems
+
+
+def _verify_manual_binding(wrangler, project: str, namespace_id: str,
+                           io: SetupIO) -> None:
+    """The fallback path's read-back: refuse to deploy until the project
+    binds ``namespace_id`` under exactly TOMBSTONES on production and
+    preview. A read that fails is a PublishError (fatal); a wrong binding
+    may be fixed in the dashboard and re-checked, and declining the
+    re-check raises KVBindingError."""
+    while True:
+        found = wrangler.pages_project_kv_binding(project, KV_BINDING_NAME)
+        problems = _binding_problems(found, namespace_id)
+        if not problems:
+            io.print(
+                f"  read back {KV_BINDING_NAME} -> {namespace_id} on production "
+                "and preview"
+            )
+            return
+        io.print("  the project's binding is not right yet: " + "; ".join(problems))
+        if not io.confirm(
+            f"Bind {namespace_id} as {KV_BINDING_NAME} on production and preview "
+            "in the dashboard (step b), then re-check?", default=True,
+        ):
+            raise KVBindingError(
+                f"Pages project {project!r}: " + "; ".join(problems)
+                + ". Purge would not work; bind the namespace in the dashboard "
+                "(Settings -> Functions) and re-run `jimemo publish setup`"
+            )
 
 
 def _validate_project_name(project: str) -> None:
@@ -704,6 +749,8 @@ def run_setup(dry_run: bool, wrangler, config_path: Path, io: SetupIO,
             while not kv_namespace_id:
                 io.print("A KV namespace id is required.")
                 kv_namespace_id = io.prompt("Cloudflare KV namespace id")
+            _verify_manual_binding(wrangler, project, kv_namespace_id, io)
+            binding_read_back = True
 
     _print_single_machine_warning(io, state_dir)
 
