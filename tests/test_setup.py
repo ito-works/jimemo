@@ -18,7 +18,11 @@ from jimemo.publish.setup import (
     TOKEN_MISSING_MESSAGE,
     run_setup,
 )
-from jimemo.publish.wrangler import NO_WRANGLER_MESSAGE, MockWrangler, PagesProjectExistsError
+import shlex
+
+from jimemo.publish.wrangler import (
+    NO_WRANGLER_MESSAGE, KVBindingError, MockWrangler, PagesProjectExistsError, Wrangler,
+)
 
 
 def test_setup_validates_project_names_via_configs_shared_validator():
@@ -291,7 +295,7 @@ def _run_real(tmp_path, monkeypatch, wrangler=None, prompts=None, confirms=None,
         monkeypatch.delenv("CLOUDFLARE_API_TOKEN", raising=False)
     wrangler = wrangler if wrangler is not None else MockWrangler()
     io = FakeIO(
-        prompts=prompts if prompts is not None else ["friend-notes", "acct123", "ns123"],
+        prompts=prompts if prompts is not None else ["friend-notes", "acct123"],
         confirms=confirms,
     )
     cfg_path = tmp_path / "config.toml"
@@ -304,7 +308,9 @@ def test_real_run_creates_kv_and_deploys_in_expected_order(tmp_path, monkeypatch
 
     assert [c[0] for c in wrangler.calls] == [
         "check_available", "curl_version", "pages_project_names", "pages_project_create",
-        "pages_project_set_fail_closed", "pages_project_fail_open",
+        "pages_project_set_fail_closed", "pages_project_kv_binding",
+        "kv_namespace_find", "kv_namespace_create", "pages_project_bind_kv",
+        "pages_project_fail_open",
         "pages_deploy", "pages_project_require_functions", "kv_put", "kv_get",
     ]
 
@@ -351,7 +357,7 @@ def test_real_run_reraises_unexpected_project_create_error(tmp_path, monkeypatch
     _patch_home(monkeypatch, tmp_path)
     monkeypatch.setenv("CLOUDFLARE_API_TOKEN", "fake-token")
     wrangler = BrokenProjectCreateWrangler()
-    io = FakeIO(prompts=["friend-notes", "acct123", "ns123"])
+    io = FakeIO(prompts=["friend-notes", "acct123"])
     cfg_path = tmp_path / "config.toml"
 
     with pytest.raises(PublishError) as exc:
@@ -434,8 +440,8 @@ def test_real_run_post_deploy_check_uses_the_supplied_kv_namespace(tmp_path, mon
 
     kv_calls = [c for c in wrangler.calls if c[0] in ("kv_put", "kv_get")]
     assert kv_calls == [
-        ("kv_put", "ns123", "__jimemo_setup_check__", "ok"),
-        ("kv_get", "ns123", "__jimemo_setup_check__"),
+        ("kv_put", "ns-1", "__jimemo_setup_check__", "ok"),
+        ("kv_get", "ns-1", "__jimemo_setup_check__"),
     ]
 
 
@@ -447,7 +453,7 @@ def test_real_run_writes_correct_config_with_no_token(tmp_path, monkeypatch):
     cf = config.publish.cloudflare
     assert cf.project == "friend-notes"
     assert cf.account_id == "acct123"
-    assert cf.kv_namespace_id == "ns123"
+    assert cf.kv_namespace_id == "ns-1"
     assert cf.base_url == "https://friend-notes.pages.dev"
 
     assert "fake-token" not in cfg_path.read_text()
@@ -468,7 +474,7 @@ def test_real_run_accepts_the_default_project_name(tmp_path, monkeypatch):
     # scripted value verbatim (unlike RealIO, which substitutes the
     # default for an empty response).
     wrangler, io, cfg_path = _run_real(
-        tmp_path, monkeypatch, prompts=[DEFAULT_PROJECT_NAME, "acct123", "ns123"],
+        tmp_path, monkeypatch, prompts=[DEFAULT_PROJECT_NAME, "acct123"],
     )
     config = load_config(cfg_path)
     assert config.publish.cloudflare.project == DEFAULT_PROJECT_NAME
@@ -615,7 +621,7 @@ def test_existing_config_declining_overwrite_leaves_it_untouched(tmp_path, monke
     _patch_home(monkeypatch, tmp_path)
 
     monkeypatch.setenv("CLOUDFLARE_API_TOKEN", "fake-token")
-    io = FakeIO(prompts=["friend-notes", "acct123", "ns123"], confirms=[False])
+    io = FakeIO(prompts=["friend-notes", "acct123"], confirms=[False])
     run_setup(False, MockWrangler(), cfg_path, io)
 
     assert cfg_path.read_text() == original
@@ -635,7 +641,7 @@ def test_existing_config_declining_overwrite_makes_no_side_effects(tmp_path, mon
     _patch_home(monkeypatch, tmp_path)
     monkeypatch.setenv("CLOUDFLARE_API_TOKEN", "fake-token")
     wrangler = MockWrangler()
-    io = FakeIO(prompts=["friend-notes", "acct123", "ns123"], confirms=[False])
+    io = FakeIO(prompts=["friend-notes", "acct123"], confirms=[False])
 
     run_setup(False, wrangler, cfg_path, io)
 
@@ -669,7 +675,7 @@ def test_real_run_rejects_invalid_project_name(tmp_path, monkeypatch, bad_name):
     _patch_home(monkeypatch, tmp_path)
     monkeypatch.setenv("CLOUDFLARE_API_TOKEN", "fake-token")
     wrangler = MockWrangler()
-    io = FakeIO(prompts=[bad_name, "acct123", "ns123"])
+    io = FakeIO(prompts=[bad_name, "acct123"])
     cfg_path = tmp_path / "config.toml"
 
     with pytest.raises(PublishError) as exc:
@@ -689,7 +695,7 @@ def test_real_run_rejects_invalid_project_name(tmp_path, monkeypatch, bad_name):
 
 def test_real_run_accepts_a_valid_hyphenated_project_name(tmp_path, monkeypatch):
     wrangler, io, cfg_path = _run_real(
-        tmp_path, monkeypatch, prompts=["a-valid-project-99", "acct123", "ns123"],
+        tmp_path, monkeypatch, prompts=["a-valid-project-99", "acct123"],
     )
 
     config = load_config(cfg_path)
@@ -813,7 +819,10 @@ def test_completion_message_shows_a_working_render_then_publish_example(tmp_path
 # ---------------------------------------------------------------------------
 
 def test_kv_create_is_a_standout_user_run_command(tmp_path, monkeypatch):
-    wrangler, io, cfg_path = _run_real(tmp_path, monkeypatch)
+    # Only the fallback path asks the human to run it.
+    wrangler, io, cfg_path = _run_real(
+        tmp_path, monkeypatch, wrangler=RefusingKVCreateWrangler(),
+        prompts=["friend-notes", "acct123", "ns123"])
 
     text = io.text()
     assert (
@@ -903,7 +912,7 @@ def test_real_run_never_deploys_when_fail_closed_does_not_stick(tmp_path, monkey
     wrangler = StickyOpen(projects=["friend-notes"], fail_open=True)
     _patch_home(monkeypatch, tmp_path)
     monkeypatch.setenv("CLOUDFLARE_API_TOKEN", "fake-token")
-    io = FakeIO(prompts=["friend-notes", "acct123", "ns123"])
+    io = FakeIO(prompts=["friend-notes", "acct123"])
 
     with pytest.raises(PublishError) as exc:
         run_setup(False, wrangler, tmp_path / "config.toml", io)
@@ -924,7 +933,7 @@ def test_real_run_refuses_old_curl_before_any_project_call(tmp_path, monkeypatch
     monkeypatch.setenv("CLOUDFLARE_API_TOKEN", "fake-token")
 
     with pytest.raises(PublishError) as exc:
-        run_setup(False, wrangler, tmp_path / "config.toml", FakeIO(prompts=["friend-notes", "acct123", "ns123"]))
+        run_setup(False, wrangler, tmp_path / "config.toml", FakeIO(prompts=["friend-notes", "acct123"]))
 
     assert str(exc.value) == CURL_TOO_OLD_MESSAGE.format(found="7.88.1")
     assert [c[0] for c in wrangler.calls] == ["check_available", "curl_version"]
@@ -940,7 +949,7 @@ def test_real_run_refuses_missing_curl(tmp_path, monkeypatch):
     monkeypatch.setenv("CLOUDFLARE_API_TOKEN", "fake-token")
 
     with pytest.raises(PublishError) as exc:
-        run_setup(False, NoCurl(), tmp_path / "config.toml", FakeIO(prompts=["friend-notes", "acct123", "ns123"]))
+        run_setup(False, NoCurl(), tmp_path / "config.toml", FakeIO(prompts=["friend-notes", "acct123"]))
 
     assert str(exc.value) == CURL_TOO_OLD_MESSAGE.format(found="none on PATH")
 
@@ -1010,10 +1019,155 @@ def test_setup_prints_the_selected_wrangler(tmp_path, monkeypatch, dry_run):
     else:
         _, io, _ = _run_real(tmp_path, monkeypatch, wrangler=wrangler)
     text = io.text()
-    commands = ["pages deploy", "kv namespace create",
-                "kv key put", "kv key get"]
+    commands = ["pages deploy", "kv key put", "kv key get"]
     if dry_run:
-        commands.append("pages project list")
+        # The manual KV create is printed only as the dry-run fallback plan.
+        commands += ["pages project list", "kv namespace create"]
     for args in commands:
         assert f"{shlex.quote(executable)} {args}" in text
     assert "npx wrangler" not in text
+
+
+# ---------------------------------------------------------------------------
+# KV namespace + TOMBSTONES binding through the API (jimemo#1wa9): setup
+# asks for the project name and account id only; the manual steps are the
+# fallback when a call is refused.
+# ---------------------------------------------------------------------------
+
+class RefusingKVCreateWrangler(MockWrangler):
+    def kv_namespace_create(self, title):
+        self.calls.append(("kv_namespace_create", title))
+        raise PublishError("KV namespace API POST did not answer success=true: [9106]")
+
+
+class RefusingBindWrangler(MockWrangler):
+    def pages_project_bind_kv(self, project, binding, namespace_id):
+        self.calls.append(("pages_project_bind_kv", project, binding, namespace_id))
+        raise PublishError("Pages project API PATCH 'friend-notes' did not answer success=true")
+
+
+class MisboundWrangler(MockWrangler):
+    """The PATCH answers success but the read-back is wrong."""
+
+    def pages_project_bind_kv(self, project, binding, namespace_id):
+        self.calls.append(("pages_project_bind_kv", project, binding, namespace_id))
+        raise KVBindingError(
+            "Pages project 'friend-notes': after binding TOMBSTONES the project "
+            "reads back wrong -- preview: TOMBSTONES is not bound")
+
+
+def test_real_run_asks_for_project_name_and_account_id_only(tmp_path, monkeypatch):
+    wrangler, io, cfg_path = _run_real(tmp_path, monkeypatch)
+
+    assert [m for m, _ in io.prompt_calls] == [
+        "Cloudflare Pages project name", "Cloudflare account id"]
+    assert "ACTION REQUIRED" not in io.text()
+
+
+def test_real_run_creates_and_binds_the_namespace_before_deploy(tmp_path, monkeypatch):
+    wrangler, io, cfg_path = _run_real(tmp_path, monkeypatch)
+
+    names = [c[0] for c in wrangler.calls]
+    assert ("kv_namespace_create", "friend-notes-tombstones") in wrangler.calls
+    assert ("pages_project_bind_kv", "friend-notes", "TOMBSTONES", "ns-1") in wrangler.calls
+    assert names.index("pages_project_bind_kv") < names.index("pages_deploy")
+    assert wrangler.kv_bindings == {"production": {"TOMBSTONES": "ns-1"},
+                                    "preview": {"TOMBSTONES": "ns-1"}}
+    assert load_config(cfg_path).publish.cloudflare.kv_namespace_id == "ns-1"
+
+
+def test_real_run_reuses_an_existing_namespace_never_duplicates(tmp_path, monkeypatch):
+    wrangler = MockWrangler(kv_namespaces={"friend-notes-tombstones": "ns-existing"})
+
+    wrangler, io, cfg_path = _run_real(tmp_path, monkeypatch, wrangler=wrangler)
+
+    assert not any(c[0] == "kv_namespace_create" for c in wrangler.calls)
+    assert ("pages_project_bind_kv", "friend-notes", "TOMBSTONES", "ns-existing") in wrangler.calls
+    assert load_config(cfg_path).publish.cloudflare.kv_namespace_id == "ns-existing"
+
+
+def test_rerun_on_an_already_bound_project_changes_nothing(tmp_path, monkeypatch):
+    wrangler = MockWrangler(projects=["friend-notes"],
+                            kv_namespaces={"friend-notes-tombstones": "ns-b"},
+                            bindings={"TOMBSTONES": "ns-b"})
+
+    wrangler, io, cfg_path = _run_real(tmp_path, monkeypatch, wrangler=wrangler)
+
+    names = [c[0] for c in wrangler.calls]
+    assert "kv_namespace_find" not in names
+    assert "kv_namespace_create" not in names
+    assert "pages_project_bind_kv" not in names
+    assert load_config(cfg_path).publish.cloudflare.kv_namespace_id == "ns-b"
+    assert "already bound" in io.text()
+
+
+def test_rerun_keeps_a_production_binding_to_another_namespace(tmp_path, monkeypatch):
+    # Rebinding to a fresh namespace would drop every existing tombstone,
+    # so the namespace production already uses wins.
+    wrangler = MockWrangler(projects=["friend-notes"])
+    wrangler.kv_bindings["production"]["TOMBSTONES"] = "ns-manual"
+
+    wrangler, io, cfg_path = _run_real(tmp_path, monkeypatch, wrangler=wrangler)
+
+    assert "kv_namespace_create" not in [c[0] for c in wrangler.calls]
+    assert ("pages_project_bind_kv", "friend-notes", "TOMBSTONES", "ns-manual") in wrangler.calls
+    assert load_config(cfg_path).publish.cloudflare.kv_namespace_id == "ns-manual"
+
+
+def test_read_back_refusal_stops_before_deploy_and_config(tmp_path, monkeypatch):
+    with pytest.raises(PublishError, match="reads back wrong"):
+        _run_real(tmp_path, monkeypatch, wrangler=MisboundWrangler())
+    assert not (tmp_path / "config.toml").exists()
+
+
+def test_read_back_refusal_makes_no_deploy(tmp_path, monkeypatch):
+    wrangler = MisboundWrangler()
+    with pytest.raises(KVBindingError):
+        _run_real(tmp_path, monkeypatch, wrangler=wrangler)
+    assert not any(c[0] == "pages_deploy" for c in wrangler.calls)
+
+
+def test_refused_create_falls_back_to_the_manual_steps(tmp_path, monkeypatch):
+    wrangler, io, cfg_path = _run_real(
+        tmp_path, monkeypatch, wrangler=RefusingKVCreateWrangler(),
+        prompts=["friend-notes", "acct123", "ns-typed"])
+
+    text = io.text()
+    assert "could not create the KV namespace" in text
+    assert "9106" in text
+    assert "ACTION REQUIRED" in text
+    assert io.prompt_calls[-1][0] == "Cloudflare KV namespace id"
+    assert not any(c[0] == "pages_project_bind_kv" for c in wrangler.calls)
+    assert any(c[0] == "pages_deploy" for c in wrangler.calls)
+    assert load_config(cfg_path).publish.cloudflare.kv_namespace_id == "ns-typed"
+
+
+def test_refused_bind_falls_back_and_names_the_created_namespace(tmp_path, monkeypatch):
+    wrangler, io, cfg_path = _run_real(
+        tmp_path, monkeypatch, wrangler=RefusingBindWrangler(),
+        prompts=["friend-notes", "acct123", "ns-1"])
+
+    text = io.text()
+    assert "could not bind" in text
+    assert "PATCH" in text
+    assert "ACTION REQUIRED" in text
+    assert "ns-1" in text
+    assert load_config(cfg_path).publish.cloudflare.kv_namespace_id == "ns-1"
+
+
+def test_dry_run_prints_the_namespace_create_and_bind_calls(tmp_path):
+    io = FakeIO()
+    wrangler = MockWrangler()
+
+    run_setup(True, wrangler, tmp_path / "config.toml", io)
+
+    text = io.text()
+    create = shlex.join(Wrangler(account_id="<ACCOUNT_ID>")._cf_account_argv(
+        "POST", "storage/kv/namespaces",
+        Wrangler.kv_namespace_create_body(f"{DEFAULT_PROJECT_NAME}-tombstones")))
+    bind = shlex.join(Wrangler(account_id="<ACCOUNT_ID>")._cf_api_argv(
+        "PATCH", DEFAULT_PROJECT_NAME,
+        Wrangler.kv_binding_body("TOMBSTONES", "<KV_NAMESPACE_ID>")))
+    assert create in text
+    assert bind in text
+    assert wrangler.calls == []

@@ -977,3 +977,176 @@ def test_pages_deploy_keeps_wrangler_log_at_least_log(tmp_path, monkeypatch,
     deploy.mkdir()
     Wrangler(executable=str(executable)).pages_deploy("p", deploy)
     assert record.read_text() == seen
+
+
+# ---------------------------------------------------------------------------
+# KV namespace + TOMBSTONES binding through the REST API (jimemo#1wa9).
+# Same curl seam as the Pages project calls: the token is a curl template.
+# ---------------------------------------------------------------------------
+
+KV_URL = "https://api.cloudflare.com/client/v4/accounts/acct-1/storage/kv/namespaces"
+
+
+def _kv_page(namespaces, page=1, total_pages=1):
+    return _ok(json.dumps({"success": True, "errors": [], "result": namespaces,
+                           "result_info": {"page": page, "total_pages": total_pages}}))
+
+
+def _configs_json(production, preview):
+    return _ok(json.dumps({"success": True, "errors": [], "result": {
+        "name": "friend-notes",
+        "deployment_configs": {"production": production, "preview": preview}}}))
+
+
+def test_kv_namespace_find_lists_and_matches_the_exact_title(monkeypatch):
+    monkeypatch.setenv("CLOUDFLARE_API_TOKEN", "super-secret-token")
+    runner = FakeRunner(_kv_page([
+        {"id": "other", "title": "friend-notes-tombstones-old"},
+        {"id": "ns-1", "title": "friend-notes-tombstones"},
+    ]))
+    w = Wrangler(runner=runner, account_id="acct-1")
+
+    assert w.kv_namespace_find("friend-notes-tombstones") == "ns-1"
+
+    argv = runner.calls[0]
+    assert argv[:2] == ["curl", "-q"]
+    assert argv[argv.index("-X") + 1] == "GET"
+    assert argv[-1] == f"{KV_URL}?per_page=100&page=1"
+    assert argv[argv.index("--expand-header") + 1] == "Authorization: Bearer {{CLOUDFLARE_API_TOKEN}}"
+    assert all("super-secret-token" not in a for a in argv)
+    assert runner.envs == [None]
+
+
+def test_kv_namespace_find_pages_through_every_page(monkeypatch):
+    w, runner = _wrangler_with_token(
+        monkeypatch,
+        _kv_page([{"id": "a", "title": "x"}], page=1, total_pages=2),
+        _kv_page([{"id": "ns-2", "title": "friend-notes-tombstones"}], page=2, total_pages=2),
+    )
+
+    assert w.kv_namespace_find("friend-notes-tombstones") == "ns-2"
+    assert [a[-1] for a in runner.calls] == [
+        f"{KV_URL}?per_page=100&page=1", f"{KV_URL}?per_page=100&page=2"]
+
+
+def test_kv_namespace_find_returns_none_when_absent(monkeypatch):
+    w, _ = _wrangler_with_token(monkeypatch, _kv_page([{"id": "a", "title": "x"}]))
+    assert w.kv_namespace_find("friend-notes-tombstones") is None
+
+
+def test_kv_namespace_create_posts_the_title_and_returns_the_id(monkeypatch):
+    w, runner = _wrangler_with_token(monkeypatch, _ok(json.dumps({
+        "success": True, "errors": [],
+        "result": {"id": "ns-new", "title": "friend-notes-tombstones"}})))
+
+    assert w.kv_namespace_create("friend-notes-tombstones") == "ns-new"
+
+    argv = runner.calls[0]
+    assert argv[argv.index("-X") + 1] == "POST"
+    assert json.loads(argv[argv.index("-d") + 1]) == {"title": "friend-notes-tombstones"}
+    assert argv[-1] == KV_URL
+
+
+@pytest.mark.parametrize("stdout,match", [
+    ('{"success": false, "errors": [{"code": 10000}], "result": null}', "Workers KV Storage:Edit"),
+    ('{"success": true, "result": {"title": "t"}}', "no namespace id"),
+])
+def test_kv_namespace_create_refuses_failures(monkeypatch, stdout, match):
+    w, _ = _wrangler_with_token(monkeypatch, _ok(stdout))
+    with pytest.raises(PublishError, match=match):
+        w.kv_namespace_create("friend-notes-tombstones")
+
+
+def test_pages_project_kv_binding_reads_both_environments(monkeypatch):
+    w, _ = _wrangler_with_token(monkeypatch, _configs_json(
+        {"kv_namespaces": {"TOMBSTONES": {"namespace_id": "ns-1"}}},
+        {"kv_namespaces": {"tombstones": {"namespace_id": "ns-1"}}}))
+
+    assert w.pages_project_kv_binding("friend-notes", "TOMBSTONES") == {
+        "production": "ns-1", "preview": None}
+
+
+def test_bind_kv_patches_only_kv_namespaces_and_keeps_other_bindings(monkeypatch):
+    before = {"fail_open": False, "compatibility_date": "2026-01-01",
+              "kv_namespaces": {"OTHER": {"namespace_id": "ns-other"}}}
+    after = {"fail_open": False, "compatibility_date": "2026-01-01",
+             "kv_namespaces": {"OTHER": {"namespace_id": "ns-other"},
+                               "TOMBSTONES": {"namespace_id": "ns-1"}}}
+    w, runner = _wrangler_with_token(
+        monkeypatch, _configs_json(before, dict(before)), _configs_json(after, after),
+        _configs_json(after, after))
+
+    w.pages_project_bind_kv("friend-notes", "TOMBSTONES", "ns-1")
+
+    get_before, patch, get_after = runner.calls
+    assert get_before[get_before.index("-X") + 1] == "GET"
+    assert patch[patch.index("-X") + 1] == "PATCH"
+    assert patch[-1] == PROJECT_URL
+    # Only kv_namespaces is sent, and it carries the existing bindings too,
+    # so the map survives whether Cloudflare merges or replaces it.
+    expected_kv = {"OTHER": {"namespace_id": "ns-other"},
+                   "TOMBSTONES": {"namespace_id": "ns-1"}}
+    assert json.loads(patch[patch.index("-d") + 1]) == {"deployment_configs": {
+        "production": {"kv_namespaces": expected_kv},
+        "preview": {"kv_namespaces": expected_kv}}}
+    assert get_after[get_after.index("-X") + 1] == "GET"
+
+
+@pytest.mark.parametrize("after_kv,match", [
+    ({}, "TOMBSTONES"),
+    ({"tombstones": {"namespace_id": "ns-1"}}, "TOMBSTONES"),
+    ({"TOMBSTONES": {"namespace_id": "ns-wrong"}}, "ns-wrong"),
+])
+def test_bind_kv_read_back_refuses_a_missing_or_misnamed_binding(monkeypatch, after_kv, match):
+    from jimemo.publish.wrangler import KVBindingError
+    good = {"kv_namespaces": {"TOMBSTONES": {"namespace_id": "ns-1"}}}
+    w, _ = _wrangler_with_token(
+        monkeypatch, _configs_json({}, {}), _configs_json(good, good),
+        _configs_json(good, {"kv_namespaces": after_kv}))
+
+    with pytest.raises(KVBindingError, match=match) as exc:
+        w.pages_project_bind_kv("friend-notes", "TOMBSTONES", "ns-1")
+    assert "preview" in str(exc.value)
+
+
+def test_bind_kv_refuses_when_the_patch_dropped_an_omitted_key(monkeypatch):
+    # If Cloudflare replaced each environment's config with the body
+    # instead of merging, keys the body omits (fail_open, other settings)
+    # would vanish: the read-back names them and refuses.
+    from jimemo.publish.wrangler import KVBindingError
+    before = {"fail_open": False, "compatibility_date": "2026-01-01"}
+    replaced = {"kv_namespaces": {"TOMBSTONES": {"namespace_id": "ns-1"}}}
+    w, _ = _wrangler_with_token(
+        monkeypatch, _configs_json(before, before), _configs_json(replaced, replaced),
+        _configs_json(replaced, replaced))
+
+    with pytest.raises(KVBindingError, match="compatibility_date") as exc:
+        w.pages_project_bind_kv("friend-notes", "TOMBSTONES", "ns-1")
+    assert "fail_open" in str(exc.value)
+
+
+def test_bind_kv_tolerates_keys_the_server_adds(monkeypatch):
+    bound = {"kv_namespaces": {"TOMBSTONES": {"namespace_id": "ns-1"}}}
+    added = dict(bound, usage_model="standard")
+    w, _ = _wrangler_with_token(
+        monkeypatch, _configs_json({}, {}), _configs_json(added, added),
+        _configs_json(added, added))
+
+    w.pages_project_bind_kv("friend-notes", "TOMBSTONES", "ns-1")
+
+
+def test_bind_kv_body_is_the_seam_builder(monkeypatch):
+    body = Wrangler.kv_binding_body("TOMBSTONES", "ns-1")
+    assert json.loads(body) == {"deployment_configs": {
+        "production": {"kv_namespaces": {"TOMBSTONES": {"namespace_id": "ns-1"}}},
+        "preview": {"kv_namespaces": {"TOMBSTONES": {"namespace_id": "ns-1"}}}}}
+
+
+def test_mock_wrangler_kv_namespace_and_binding_state():
+    m = MockWrangler()
+    assert m.kv_namespace_find("p-tombstones") is None
+    ns = m.kv_namespace_create("p-tombstones")
+    assert m.kv_namespace_find("p-tombstones") == ns
+    assert m.pages_project_kv_binding("p", "TOMBSTONES") == {"production": None, "preview": None}
+    m.pages_project_bind_kv("p", "TOMBSTONES", ns)
+    assert m.pages_project_kv_binding("p", "TOMBSTONES") == {"production": ns, "preview": ns}

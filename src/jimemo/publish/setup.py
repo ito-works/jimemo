@@ -15,11 +15,10 @@ Pages project list/create calls setup needs, plus ``pages_deploy``,
 publish/purge/list/gc path. It also exposes
 `curl_version`, `pages_project_fail_open`, and
 `pages_project_set_fail_closed` (Pages project config via curl; wrangler
-has no subcommand for fail_open). There is still no "create a KV namespace" or
-"bind a KV namespace to a Pages project" method: those are one-time
-account-setup actions without a single reliable wrangler verb for the
-binding, so setup prints the manual steps and asks the human for the
-resulting id.
+has no subcommand for fail_open), and, through the same curl path,
+`kv_namespace_find`, `kv_namespace_create`, `pages_project_kv_binding`
+and `pages_project_bind_kv` for the tombstone KV namespace and its
+TOMBSTONES binding.
 
 Concretely, this wizard:
   - Installs the bundled middleware/``_headers``/root index (source:
@@ -57,11 +56,14 @@ Concretely, this wizard:
     from another machine (see the single-machine section below), which
     may already hold strays -- ``.git/``, ``.DS_Store``, sync-conflict
     copies -- that must never be deployed.
-  - Does NOT create a KV namespace or bind it to the Pages project as
-    ``TOMBSTONES`` -- there is no wrangler-seam call for either. It
-    prints the exact manual command / dashboard step for both, in every
-    mode (not just --dry-run), and asks the human to supply the
-    resulting account id and KV namespace id.
+  - DOES create (or reuse, never duplicate) the ``<project>-tombstones``
+    KV namespace and bind it as ``TOMBSTONES`` on production and preview
+    before the first deploy, then read the project back and refuse
+    unless the binding is there under that exact name on both (see
+    ``_ensure_kv_binding``). A project already bound on both is left
+    unchanged. When Cloudflare refuses one of those calls, setup names
+    it and falls back to printing the manual command / dashboard step
+    and asking the human for the namespace id.
   - DOES run a best-effort post-deploy check: a kv_put/kv_get round trip
     against the namespace id the human supplied. This can only prove the
     KV namespace itself is reachable and writable -- it cannot prove the
@@ -93,8 +95,8 @@ its own ``$ ``-prefixed line (see ``_print_user_command``); flat
 ``running:`` / ``[dry-run] would run:`` lines are wrangler calls this
 wizard makes on its own. The intro states the convention up front.
 Feedback from the first external setup run: without the marker the two
-read alike, and the one command setup actually blocks on (the KV
-namespace create) was easy to miss mid-prose.
+read alike, and the command setup blocked on (the KV namespace create,
+now only on the fallback path) was easy to miss mid-prose.
 """
 import os
 import shlex
@@ -115,7 +117,7 @@ from .cloudflare_backend import (
 from . import gitsync
 from .wrangler import (
     CURL_TOO_OLD_MESSAGE, FAIL_CLOSED_BODY, MIN_CURL, NO_WRANGLER_MESSAGE,
-    PagesProjectExistsError, Wrangler,
+    KVBindingError, PagesProjectExistsError, Wrangler,
 )
 
 DEFAULT_PROJECT_NAME = "jimemo-notes"
@@ -212,6 +214,27 @@ def _fail_closed_argv(account_id: str, project: str) -> str:
     )
 
 
+def _kv_list_argv(account_id: str) -> str:
+    return shlex.join(Wrangler(account_id=account_id)._cf_account_argv(
+        "GET", "storage/kv/namespaces?per_page=100&page=1"))
+
+
+def _kv_create_argv(account_id: str, title: str) -> str:
+    return shlex.join(Wrangler(account_id=account_id)._cf_account_argv(
+        "POST", "storage/kv/namespaces", Wrangler.kv_namespace_create_body(title)))
+
+
+def _kv_bind_argv(account_id: str, project: str, namespace_id: str) -> str:
+    """The binding PATCH as printed. The real body also repeats any
+    other KV bindings the project already has (see kv_binding_body)."""
+    return shlex.join(Wrangler(account_id=account_id)._cf_api_argv(
+        "PATCH", project, Wrangler.kv_binding_body(KV_BINDING_NAME, namespace_id)))
+
+
+def _kv_title(project: str) -> str:
+    return f"{project}-tombstones"
+
+
 def _kv_put_argv(kv_namespace_id: str, executable: str = "wrangler") -> str:
     return shlex.join([executable, "kv", "key", "put", _SETUP_CHECK_KEY,
                        _SETUP_CHECK_VALUE, "--namespace-id", kv_namespace_id, "--remote"])
@@ -286,22 +309,30 @@ def _print_single_machine_warning(io: SetupIO, state_dir: Path) -> None:
     )
 
 
-def _print_kv_instructions(io: SetupIO, project: str, executable: str = "wrangler") -> None:
+def _print_kv_instructions(io: SetupIO, project: str, executable: str = "wrangler",
+                           known_id: Optional[str] = None) -> None:
+    """The manual fallback, printed when an API call for the namespace
+    or the binding is refused (and in --dry-run, as the fallback plan)."""
     io.print(
         "\n"
         "ACTION REQUIRED -- Cloudflare KV namespace + binding. These two "
         "steps are\n"
-        "yours to do (no wrangler-seam call automates them; see setup.py's "
-        "module\n"
-        "docstring for why), and setup waits for step (a)'s id before "
-        "continuing:\n"
+        "yours to do (setup could not make the API calls itself), and setup "
+        "waits for\n"
+        "step (a)'s id before continuing:\n"
         "\n"
         "  a. Create a KV namespace, if you don't have one for this "
-        "project yet.\n"
-        "     Run this yourself, in a separate terminal:"
+        "project yet."
     )
+    if known_id:
+        io.print(
+            f"     Setup already created or found {_kv_title(project)!r} with "
+            f"id {known_id};\n"
+            "     use that id and skip the command below."
+        )
+    io.print("     Run this yourself, in a separate terminal:")
     _print_user_command(
-        io, shlex.join([executable, "kv", "namespace", "create", f"{project}-tombstones"])
+        io, shlex.join([executable, "kv", "namespace", "create", _kv_title(project)])
     )
     io.print(
         "     Copy the \"id\" field from its output -- the prompt below "
@@ -320,7 +351,8 @@ def _print_kv_instructions(io: SetupIO, project: str, executable: str = "wrangle
 
 
 def _post_deploy_binding_check(
-    wrangler, kv_namespace_id: str, base_url: str, io: SetupIO, dry_run: bool
+    wrangler, kv_namespace_id: str, base_url: str, io: SetupIO, dry_run: bool,
+    binding_read_back: bool = False,
 ) -> None:
     """Best-effort check that the KV namespace itself is reachable and
     writable, via the same kv_put/kv_get the Wrangler seam already
@@ -364,13 +396,24 @@ def _post_deploy_binding_check(
         )
         return
 
+    if binding_read_back:
+        note = (
+            f"  NOTE: the project config read back {KV_BINDING_NAME} bound to "
+            "this namespace,\n"
+            f"  but this does not yet prove env.{KV_BINDING_NAME} resolves on "
+            "a live request.\n"
+        )
+    else:
+        note = (
+            f"  NOTE: this does not yet prove env.{KV_BINDING_NAME} is bound "
+            "in the Pages\n"
+            "  project's Functions settings -- that only shows up on a live "
+            "request.\n"
+        )
     io.print(
         "  ok: the KV namespace is reachable and writable.\n"
-        f"  NOTE: this does not yet prove env.{KV_BINDING_NAME} is bound "
-        "in the Pages\n"
-        "  project's Functions settings -- that only shows up on a live "
-        "request. Verify\n"
-        "  it end to end once, manually:\n"
+        + note +
+        "  Verify it end to end once, manually:\n"
         "      $ jimemo render ... -o out.html\n"
         "      $ jimemo publish out.html   # note the printed URL\n"
         "      $ jimemo publish purge <that URL>\n"
@@ -380,6 +423,70 @@ def _post_deploy_binding_check(
         "missing or\n"
         "  misnamed in the Pages project's dashboard settings."
     )
+
+
+def _ensure_kv_binding(wrangler, project: str, io: SetupIO) -> Optional[str]:
+    """Create or reuse the ``<project>-tombstones`` KV namespace and bind
+    it as TOMBSTONES on production and preview, through the Cloudflare
+    API. Returns the bound namespace id, or None when a call was refused:
+    the caller then prints the manual steps and asks for the id.
+
+    A project whose production environment already binds TOMBSTONES
+    keeps that namespace (its tombstones live there); when preview binds
+    the same id too, nothing is changed at all. A binding PATCH that
+    answers success but reads back wrong raises KVBindingError -- a
+    refusal, never a fallback."""
+    title = _kv_title(project)
+    known: Optional[str] = None
+    step = f"read the project's {KV_BINDING_NAME} binding (GET Pages project)"
+    try:
+        current = wrangler.pages_project_kv_binding(project, KV_BINDING_NAME)
+        production, preview = current["production"], current["preview"]
+        if production and production == preview:
+            io.print(
+                f"  {KV_BINDING_NAME} is already bound to KV namespace "
+                f"{production} on production and preview; nothing to change"
+            )
+            return production
+        if production:
+            known = production
+            io.print(
+                f"  production already binds {KV_BINDING_NAME} to {production}; "
+                "keeping that namespace (its tombstones live there)"
+            )
+        else:
+            step = "list the account's KV namespaces (GET storage/kv/namespaces)"
+            known = wrangler.kv_namespace_find(title)
+            if known:
+                io.print(f"  reusing existing KV namespace {title!r} ({known})")
+            else:
+                step = f"create the KV namespace {title!r} (POST storage/kv/namespaces)"
+                io.print(
+                    f"  creating KV namespace via: "
+                    f"{_kv_create_argv(wrangler.account_id, title)}"
+                )
+                known = wrangler.kv_namespace_create(title)
+                io.print(f"  created KV namespace {title!r} ({known})")
+        step = (f"bind {KV_BINDING_NAME} on production and preview "
+                "(PATCH Pages project)")
+        io.print(
+            "  binding via: "
+            f"{_kv_bind_argv(wrangler.account_id, project, known)}"
+        )
+        wrangler.pages_project_bind_kv(project, KV_BINDING_NAME, known)
+    except KVBindingError:
+        raise
+    except PublishError as e:
+        verb = step.split(" ", 1)
+        io.print(f"  could not {verb[0]} {verb[1]}: {e}")
+        io.print("  falling back to the manual steps below.")
+        _print_kv_instructions(io, project, wrangler.executable, known_id=known)
+        return None
+    io.print(
+        f"  bound {KV_BINDING_NAME} -> {known} on production and preview "
+        "(read back from the project)"
+    )
+    return known
 
 
 def _validate_project_name(project: str) -> None:
@@ -440,9 +547,9 @@ def run_setup(dry_run: bool, wrangler, config_path: Path, io: SetupIO,
     account just by declining the config write at the very end). Then
     prompts for a project name (default DEFAULT_PROJECT_NAME, validated
     against config.py's valid_project_name()), an account id, ensures the
-    Pages project exists, and prompts for a KV namespace id (printing
-    manual instructions for the latter, since no wrangler-seam call can
-    create/bind one -- see module docstring), installs the
+    Pages project exists, creates or reuses the KV namespace and binds it
+    as TOMBSTONES through the API (prompting for a namespace id, with the
+    manual instructions, only when a call is refused), installs the
     middleware/_headers/index.html into ``~/.jimemo/cloudflare/<project>/``
     (the SAME local state directory cloudflare_backend.py's
     CloudflarePublisher deploys on every future publish() call -- see
@@ -455,8 +562,8 @@ def run_setup(dry_run: bool, wrangler, config_path: Path, io: SetupIO,
     ~/.jimemo/config.toml.
 
     Raises PublishError if CLOUDFLARE_API_TOKEN is unset, the selected Wrangler
-    is unavailable, or (non-dry-run) a wrangler call fails or the
-    project name is invalid.
+    is unavailable, or (non-dry-run) a wrangler call fails, the
+    project name is invalid, or the TOMBSTONES binding reads back wrong.
     """
     _print_intro(io)
 
@@ -567,19 +674,38 @@ def run_setup(dry_run: bool, wrangler, config_path: Path, io: SetupIO,
         io.print("  set fail_open=false on production and preview (a Functions "
                  "outage now returns an error instead of serving purged pages)")
 
-    _print_single_machine_warning(io, state_dir)
-
-    _print_kv_instructions(io, project, wrangler.executable)
+    # Bind BEFORE the first deploy: a deployment picks up the project's
+    # bindings when it is created.
+    io.print(f"\n  KV namespace {_kv_title(project)!r}, bound as {KV_BINDING_NAME}:")
+    binding_read_back = False
     if dry_run:
         io.print(
-            f"[dry-run] would prompt for the KV namespace id; using a "
-            f"placeholder ({kv_namespace_id})."
+            "  [dry-run] would read the project's current binding via: "
+            f"{shlex.join(Wrangler(account_id=account_id)._cf_api_argv('GET', project))}"
         )
+        io.print(f"  [dry-run] would look for an existing namespace via: "
+                 f"{_kv_list_argv(account_id)}")
+        io.print(f"  [dry-run] would create it if missing via: "
+                 f"{_kv_create_argv(account_id, _kv_title(project))}")
+        io.print(f"  [dry-run] would bind it on production and preview via: "
+                 f"{_kv_bind_argv(account_id, project, kv_namespace_id)}")
+        io.print(f"  [dry-run] then read the project back and refuse unless "
+                 f"{KV_BINDING_NAME} is bound on both")
+        io.print("  [dry-run] if a call is refused, setup falls back to these "
+                 "manual steps:")
+        _print_kv_instructions(io, project, wrangler.executable)
     else:
-        kv_namespace_id = io.prompt("Cloudflare KV namespace id")
-        while not kv_namespace_id:
-            io.print("A KV namespace id is required.")
+        bound = _ensure_kv_binding(wrangler, project, io)
+        if bound:
+            kv_namespace_id = bound
+            binding_read_back = True
+        else:
             kv_namespace_id = io.prompt("Cloudflare KV namespace id")
+            while not kv_namespace_id:
+                io.print("A KV namespace id is required.")
+                kv_namespace_id = io.prompt("Cloudflare KV namespace id")
+
+    _print_single_machine_warning(io, state_dir)
 
     io.print(
         f"\nStep 3: install the tombstone/purge middleware into {state_dir}\n"
@@ -651,7 +777,8 @@ def run_setup(dry_run: bool, wrangler, config_path: Path, io: SetupIO,
             io.print(f"  running: {_deploy_argv(project, deploy_dir, wrangler.executable)}")
             deploy_and_verify(wrangler, project, deploy_dir)
 
-    _post_deploy_binding_check(wrangler, kv_namespace_id, base_url, io, dry_run)
+    _post_deploy_binding_check(wrangler, kv_namespace_id, base_url, io, dry_run,
+                               binding_read_back)
 
     io.print(f"\nStep 5: write {config_path}")
     if dry_run:
