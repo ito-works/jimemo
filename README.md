@@ -525,7 +525,8 @@ for the project name and the account id only: it creates (or reuses) the
 reads the project back and refuses unless the binding is there on both
 production and preview. If Cloudflare refuses either call, the wizard
 names the call and falls back to printing the manual command and
-dashboard step. See [`docs/publish-setup.md`](docs/publish-setup.md)
+dashboard step, then reads the project back the same way and will not
+deploy until the binding is there. See [`docs/publish-setup.md`](docs/publish-setup.md)
 for the full walkthrough. Jimemo runs `wrangler` on PATH directly;
 `JIMEMO_WRANGLER=/path/to/wrangler` selects an executable or wrapper
 instead. It never downloads Wrangler through bare `npx`, so choose and

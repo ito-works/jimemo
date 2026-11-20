@@ -177,7 +177,16 @@ automatically, mirroring notes.ito.com's model and ordering:
      back to the manual steps: print
      `wrangler kv namespace create <project>-tombstones` (using your
      selected executable) and the dashboard step (Settings -> Functions
-     -> KV namespace bindings, name `TOMBSTONES`), and ask for the id,
+     -> KV namespace bindings, name `TOMBSTONES`), ask for the id, and
+     read the project back: it will not deploy until `TOMBSTONES` points
+     at that id on production and preview (a wrong binding can be fixed
+     in the dashboard and re-checked; declining the re-check refuses),
+   - if the binding call answered success but the read-back that follows
+     cannot be made, refuse rather than fall back: an unverified binding
+     never reaches a deploy,
+   - page through the account's namespace list by its `total_count`
+     (or, without one, until a page comes back short) so an existing
+     `<project>-tombstones` past the first page is reused, not duplicated,
    - install the middleware, `_headers`, and root index into
      `~/.jimemo/cloudflare/<project>/` -- the persistent local state
      directory `jimemo publish` deploys from every time, not a one-off

@@ -612,11 +612,26 @@ class Wrangler:
                 if (isinstance(item, dict) and item.get("title") == title
                         and isinstance(item.get("id"), str) and item["id"]):
                     return item["id"]
-            info = envelope.get("result_info")
-            total = info.get("total_pages") if isinstance(info, dict) else None
-            if not (isinstance(total, int) and page < total):
+            if not self._kv_list_has_more(envelope, page):
                 return None
         return None
+
+    @staticmethod
+    def _kv_list_has_more(envelope: Dict[str, Any], page: int) -> bool:
+        """Whether a later page of the namespace list may hold more.
+        Cloudflare documents ``count``/``page``/``per_page``/
+        ``total_count`` in ``result_info``, not ``total_pages``, so use
+        whichever total is present and otherwise read on while a page
+        comes back full."""
+        info = envelope.get("result_info")
+        info = info if isinstance(info, dict) else {}
+        total_pages = info.get("total_pages")
+        if isinstance(total_pages, int) and not isinstance(total_pages, bool):
+            return page < total_pages
+        total_count = info.get("total_count")
+        if isinstance(total_count, int) and not isinstance(total_count, bool):
+            return page * KV_LIST_PER_PAGE < total_count
+        return len(envelope["result"]) >= KV_LIST_PER_PAGE
 
     @staticmethod
     def kv_namespace_create_body(title: str) -> str:
@@ -693,7 +708,17 @@ class Wrangler:
         existing = {env: self._kv_map(cfg) for env, cfg in before.items()}
         self._cf_api("PATCH", project,
                      self.kv_binding_body(binding, namespace_id, existing))
-        after = self._env_configs(self._cf_api("GET", project))
+        try:
+            after = self._env_configs(self._cf_api("GET", project))
+        except PublishError as e:
+            # The PATCH answered success; an unverified binding is a
+            # refusal, never the manual fallback.
+            raise KVBindingError(
+                f"Pages project {project!r}: bound {binding} but could not "
+                f"read the project back to verify it: {e}. Check the "
+                "project's KV namespace bindings (Settings -> Functions) and "
+                "re-run `jimemo publish setup`"
+            ) from e
         problems = []
         for env in ("production", "preview"):
             bound = self._bound_id(after[env], binding)
