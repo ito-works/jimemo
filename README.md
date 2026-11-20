@@ -518,11 +518,14 @@ It needs Node and a Wrangler version you choose and install, curl >= 8.3 (one
 project-config call per deploy that wrangler cannot make: it confirms the
 Pages project is fail-closed, so a Functions outage never serves purged
 pages), and a Cloudflare API token scoped to `Pages: Edit` + `Workers KV
-Storage: Edit`, exported as `CLOUDFLARE_API_TOKEN`; a couple
-of one-time steps (creating the KV namespace, binding it to the Pages
-project as `TOMBSTONES`) have no wrangler CLI equivalent, so the wizard
-prints the exact manual command or dashboard step instead of faking
-automation of it. See [`docs/publish-setup.md`](docs/publish-setup.md)
+Storage: Edit`, exported as `CLOUDFLARE_API_TOKEN`. The wizard asks
+for the project name and the account id only: it creates (or reuses) the
+`<project>-tombstones` KV namespace and binds it to the Pages project as
+`TOMBSTONES` through the Cloudflare API before the first deploy, then
+reads the project back and refuses unless the binding is there on both
+production and preview. If Cloudflare refuses either call, the wizard
+names the call and falls back to printing the manual command and
+dashboard step. See [`docs/publish-setup.md`](docs/publish-setup.md)
 for the full walkthrough. Jimemo runs `wrangler` on PATH directly;
 `JIMEMO_WRANGLER=/path/to/wrangler` selects an executable or wrapper
 instead. It never downloads Wrangler through bare `npx`, so choose and

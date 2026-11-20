@@ -236,11 +236,14 @@ contract in detail.
     site.
   - `setup.py` — the `jimemo publish setup` wizard (interactive and
     `--dry-run`): installs the bundled middleware/`_headers`/root index
-    from `publish/cloudflare/` into the state dir, deploys it, walks the
-    human through the two steps with no wrangler-CLI equivalent
-    (creating the KV namespace, binding it to the Pages project as
-    `TOMBSTONES`), and writes `~/.jimemo/config.toml` — never the API
-    token. Full walkthrough: `docs/publish-setup.md`.
+    from `publish/cloudflare/` into the state dir, creates or reuses the
+    `<project>-tombstones` KV namespace and binds it as `TOMBSTONES` on
+    production and preview through the Cloudflare API before the first
+    deploy (`wrangler.py`'s `kv_namespace_find`, `kv_namespace_create`,
+    `pages_project_bind_kv`, which reads the project back and refuses a
+    missing or misnamed binding), deploys, and writes
+    `~/.jimemo/config.toml` — never the API token. A refused API call
+    falls back to the manual steps. Full walkthrough: `docs/publish-setup.md`.
 - `publish/cloudflare/` (repo root, distinct from `src/jimemo/publish/`)
   — `_middleware.js`, `_headers`, `index.html`: the Cloudflare Pages
   Functions bundle the `cloudflare` backend deploys. `_middleware.js` is

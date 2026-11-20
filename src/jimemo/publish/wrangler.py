@@ -171,6 +171,21 @@ class PagesProjectExistsError(PublishError):
     """The Pages create endpoint reports duplicate project code 8000002."""
 
 
+class KVBindingError(PublishError):
+    """The binding PATCH answered success, but reading the project back
+    does not show the binding under the exact name and namespace id on
+    both environments, or shows another deployment_configs setting
+    dropped or changed. A refusal: the project must not be deployed as
+    if purge worked."""
+
+
+#: KV namespaces requested per page when listing (Cloudflare's maximum).
+KV_LIST_PER_PAGE = 100
+#: Upper bound on pages read while listing, so a malformed result_info
+#: can never loop forever (100 x 100 namespaces is far past any account).
+KV_LIST_MAX_PAGES = 100
+
+
 class Wrangler:
     """Thin argv-building wrapper around ``wrangler``, one method per
     subcommand the cloudflare backend needs: listing Cloudflare Pages
@@ -393,6 +408,14 @@ class Wrangler:
 
     def _cf_api_argv(self, method: str, project: str,
                      body: Optional[str] = None) -> List[str]:
+        suffix = f"/{project}" if project else ""
+        return self._cf_account_argv(method, f"pages/projects{suffix}", body)
+
+    def _cf_account_argv(self, method: str, path: str,
+                         body: Optional[str] = None) -> List[str]:
+        """curl argv for ``{CF_API}/accounts/<account_id>/<path>``. The
+        Authorization header is a curl template: curl expands the token
+        from its own environment, so it is never in this list."""
         argv = [
             self._curl, "-q", "-sS", "--max-time", "30",
             "--variable", "%CLOUDFLARE_API_TOKEN",
@@ -401,8 +424,7 @@ class Wrangler:
         ]
         if body is not None:
             argv += ["-d", body]
-        suffix = f"/{project}" if project else ""
-        argv.append(f"{CF_API}/accounts/{self.account_id}/pages/projects{suffix}")
+        argv.append(f"{CF_API}/accounts/{self.account_id}/{path}")
         return argv
 
     def _cf_api(self, method: str, project: str,
@@ -412,6 +434,29 @@ class Wrangler:
         no account id, no token in the environment (presence only -- the
         value is never read), curl missing, nonzero exit, non-JSON, or an
         envelope whose ``success`` is not the literal boolean true."""
+        suffix = f"/{project}" if project else ""
+        return self._cf_request(
+            method, f"pages/projects{suffix}", body,
+            what=f"Pages project {project!r}",
+            api=f"Pages project API {method} {project!r}",
+            scope="Pages:Edit", result_type=dict,
+            exists_code=8000002 if (method == "POST" and not project) else None,
+        )
+
+    def _cf_request(self, method: str, path: str, body: Optional[str],
+                    *, what: str, api: str, scope: str, result_type: type,
+                    exists_code: Optional[int] = None) -> Any:
+        """One account-scoped Cloudflare API call through curl; returns the
+        envelope's ``result`` when it is a ``result_type``. ``what`` and
+        ``api`` name the call in errors; ``scope`` is the token scope the
+        auth hint names."""
+        return self._cf_envelope(method, path, body, what=what, api=api,
+                                 scope=scope, result_type=result_type,
+                                 exists_code=exists_code)["result"]
+
+    def _cf_envelope(self, method: str, path: str, body: Optional[str],
+                     *, what: str, api: str, scope: str, result_type: type,
+                     exists_code: Optional[int] = None) -> Dict[str, Any]:
         if not self.account_id:
             raise PublishError(
                 "cloudflare backend needs account_id to read the Pages project "
@@ -421,7 +466,7 @@ class Wrangler:
         if "CLOUDFLARE_API_TOKEN" not in os.environ:
             raise PublishError(TOKEN_ENV_REQUIRED_MESSAGE)
         try:
-            result = self._run(self._cf_api_argv(method, project, body), None)
+            result = self._run(self._cf_account_argv(method, path, body), None)
         except OSError as e:
             # Any process-start failure (not found, permission denied,
             # exec-format error) is a refusal, never a traceback. str(e)
@@ -435,34 +480,34 @@ class Wrangler:
         if result.returncode != 0:
             stderr = (result.stderr or "").strip()
             raise PublishError(
-                f"curl {method} Pages project {project!r} failed "
+                f"curl {method} {what} failed "
                 f"(exit {result.returncode}): {stderr}"
             )
         try:
             payload = json.loads(result.stdout)
         except json.JSONDecodeError as e:
             raise PublishError(
-                f"Pages project API {method} {project!r}: could not parse JSON output: {e}"
+                f"{api}: could not parse JSON output: {e}"
             )
         if (not isinstance(payload, dict) or payload.get("success") is not True
-                or not isinstance(payload.get("result"), dict)):
+                or not isinstance(payload.get("result"), result_type)):
             errors = payload.get("errors") if isinstance(payload, dict) else payload
             hint = ""
             if isinstance(errors, list) and any(
                 isinstance(e, dict) and e.get("code") in AUTH_ERROR_CODES
                 for e in errors
             ):
-                hint = "; check that CLOUDFLARE_API_TOKEN is valid and scoped Pages:Edit"
+                hint = f"; check that CLOUDFLARE_API_TOKEN is valid and scoped {scope}"
             error_type = PublishError
-            if method == "POST" and not project and isinstance(errors, list) and any(
-                isinstance(e, dict) and e.get("code") == 8000002 for e in errors
+            if exists_code is not None and isinstance(errors, list) and any(
+                isinstance(e, dict) and e.get("code") == exists_code for e in errors
             ):
                 error_type = PagesProjectExistsError
             raise error_type(
-                f"Pages project API {method} {project!r} did not answer "
+                f"{api} did not answer "
                 f"success=true: {errors!r}{hint}"
             )
-        return payload["result"]
+        return payload
 
     @staticmethod
     def _open_flags(result: Dict[str, Any]) -> Dict[str, bool]:
@@ -553,6 +598,132 @@ class Wrangler:
                 f"preview={'open' if flags['preview'] else 'closed'})"
             )
 
+    def kv_namespace_find(self, title: str) -> Optional[str]:
+        """The id of the account's KV namespace titled exactly ``title``,
+        or None. Reads every page of the namespace list, so an existing
+        namespace is found (and reused) rather than duplicated."""
+        for page in range(1, KV_LIST_MAX_PAGES + 1):
+            envelope = self._cf_envelope(
+                "GET", f"storage/kv/namespaces?per_page={KV_LIST_PER_PAGE}&page={page}",
+                None, what="KV namespace list", api="KV namespace API GET (list)",
+                scope="Workers KV Storage:Edit", result_type=list,
+            )
+            for item in envelope["result"]:
+                if (isinstance(item, dict) and item.get("title") == title
+                        and isinstance(item.get("id"), str) and item["id"]):
+                    return item["id"]
+            info = envelope.get("result_info")
+            total = info.get("total_pages") if isinstance(info, dict) else None
+            if not (isinstance(total, int) and page < total):
+                return None
+        return None
+
+    @staticmethod
+    def kv_namespace_create_body(title: str) -> str:
+        return json.dumps({"title": title}, separators=(",", ":"))
+
+    def kv_namespace_create(self, title: str) -> str:
+        """Create a KV namespace titled ``title``; returns its id."""
+        result = self._cf_request(
+            "POST", "storage/kv/namespaces", self.kv_namespace_create_body(title),
+            what=f"KV namespace create {title!r}",
+            api=f"KV namespace API POST {title!r}",
+            scope="Workers KV Storage:Edit", result_type=dict,
+        )
+        ns_id = result.get("id")
+        if not (isinstance(ns_id, str) and ns_id):
+            raise PublishError(
+                f"KV namespace API POST {title!r} answered success but carried "
+                "no namespace id"
+            )
+        return ns_id
+
+    @staticmethod
+    def _env_configs(result: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+        dc = result.get("deployment_configs")
+        dc = dc if isinstance(dc, dict) else {}
+        return {env: (dc.get(env) if isinstance(dc.get(env), dict) else {})
+                for env in ("production", "preview")}
+
+    @staticmethod
+    def _kv_map(cfg: Dict[str, Any]) -> Dict[str, Any]:
+        kv = cfg.get("kv_namespaces")
+        return kv if isinstance(kv, dict) else {}
+
+    @classmethod
+    def _bound_id(cls, cfg: Dict[str, Any], binding: str) -> Optional[str]:
+        entry = cls._kv_map(cfg).get(binding)
+        ns_id = entry.get("namespace_id") if isinstance(entry, dict) else None
+        return ns_id if isinstance(ns_id, str) and ns_id else None
+
+    def pages_project_kv_binding(
+        self, project: str, binding: str
+    ) -> Dict[str, Optional[str]]:
+        """``{"production": id_or_None, "preview": id_or_None}``: the KV
+        namespace id bound under exactly ``binding`` on each environment."""
+        configs = self._env_configs(self._cf_api("GET", project))
+        return {env: self._bound_id(cfg, binding) for env, cfg in configs.items()}
+
+    @staticmethod
+    def kv_binding_body(
+        binding: str, namespace_id: str,
+        existing: Optional[Dict[str, Dict[str, Any]]] = None,
+    ) -> str:
+        """PATCH body binding ``namespace_id`` as ``binding`` on both
+        environments. It sends ``kv_namespaces`` and nothing else, and
+        repeats each environment's ``existing`` bindings, so other
+        bindings survive whether the API merges or replaces that map."""
+        existing = existing or {}
+        configs = {}
+        for env in ("production", "preview"):
+            kv = dict(existing.get(env) or {})
+            kv[binding] = {"namespace_id": namespace_id}
+            configs[env] = {"kv_namespaces": kv}
+        return json.dumps({"deployment_configs": configs}, separators=(",", ":"))
+
+    def pages_project_bind_kv(
+        self, project: str, binding: str, namespace_id: str
+    ) -> None:
+        """Bind ``namespace_id`` as ``binding`` on production and preview,
+        then read the project back. Raises KVBindingError unless the
+        read-back shows exactly that binding on both environments and
+        every other deployment_configs setting present before the PATCH
+        is still present and unchanged (keys the API adds are allowed)."""
+        before = self._env_configs(self._cf_api("GET", project))
+        existing = {env: self._kv_map(cfg) for env, cfg in before.items()}
+        self._cf_api("PATCH", project,
+                     self.kv_binding_body(binding, namespace_id, existing))
+        after = self._env_configs(self._cf_api("GET", project))
+        problems = []
+        for env in ("production", "preview"):
+            bound = self._bound_id(after[env], binding)
+            if bound != namespace_id:
+                problems.append(
+                    f"{env}: {binding} is "
+                    + (f"bound to {bound}" if bound else "not bound")
+                    + f" (expected {namespace_id})"
+                )
+            changed = sorted(
+                key for key, value in before[env].items()
+                if key != "kv_namespaces" and after[env].get(key) != value
+            )
+            changed += sorted(
+                f"kv_namespaces.{name}"
+                for name, value in existing[env].items()
+                if name != binding and self._kv_map(after[env]).get(name) != value
+            )
+            if changed:
+                problems.append(f"{env}: the PATCH dropped or changed "
+                                + ", ".join(changed))
+        if problems:
+            raise KVBindingError(
+                f"Pages project {project!r}: after binding {binding} the "
+                "project reads back wrong -- " + "; ".join(problems)
+                + ". Purge would not work; fix the project's KV namespace "
+                "bindings in the dashboard (Settings -> Functions) and re-run "
+                "`jimemo publish setup`"
+            )
+
     def kv_put(self, namespace_id: str, key: str, value: str) -> None:
         """Write ``value`` under ``key`` in the KV namespace. ``--remote``
         is explicit so this always hits the real (production) namespace,
@@ -610,6 +781,8 @@ class MockWrangler:
         projects: Optional[List[str]] = None,
         fail_open: bool = False,
         executable: str = "wrangler",
+        kv_namespaces: Optional[Dict[str, str]] = None,
+        bindings: Optional[Dict[str, str]] = None,
     ):
         self.executable = executable
         self._deploys = 0
@@ -619,6 +792,11 @@ class MockWrangler:
         self._projects = set(projects or [])
         self.fail_open: Dict[str, bool] = {
             "production": bool(fail_open), "preview": bool(fail_open)}
+        #: title -> id of the account's KV namespaces.
+        self.kv_namespaces: Dict[str, str] = dict(kv_namespaces or {})
+        #: env -> {binding name: namespace id} on the Pages project.
+        self.kv_bindings: Dict[str, Dict[str, str]] = {
+            env: dict(bindings or {}) for env in ("production", "preview")}
 
     def check_available(self) -> bool:
         self.calls.append(("check_available",))
@@ -662,6 +840,30 @@ class MockWrangler:
     def pages_project_set_fail_closed(self, project: str) -> None:
         self.calls.append(("pages_project_set_fail_closed", project))
         self.fail_open = {"production": False, "preview": False}
+
+    def kv_namespace_find(self, title: str) -> Optional[str]:
+        self.calls.append(("kv_namespace_find", title))
+        return self.kv_namespaces.get(title)
+
+    def kv_namespace_create(self, title: str) -> str:
+        self.calls.append(("kv_namespace_create", title))
+        ns_id = f"ns-{len(self.kv_namespaces) + 1}"
+        self.kv_namespaces[title] = ns_id
+        return ns_id
+
+    def pages_project_kv_binding(
+        self, project: str, binding: str
+    ) -> Dict[str, Optional[str]]:
+        self.calls.append(("pages_project_kv_binding", project, binding))
+        return {env: self.kv_bindings[env].get(binding)
+                for env in ("production", "preview")}
+
+    def pages_project_bind_kv(
+        self, project: str, binding: str, namespace_id: str
+    ) -> None:
+        self.calls.append(("pages_project_bind_kv", project, binding, namespace_id))
+        for env in ("production", "preview"):
+            self.kv_bindings[env][binding] = namespace_id
 
     def kv_put(self, namespace_id: str, key: str, value: str) -> None:
         self.calls.append(("kv_put", namespace_id, key, value))

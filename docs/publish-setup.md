@@ -21,12 +21,14 @@ no subcommand for `fail_open`. `pages_project_create` also uses this REST
 path: Wrangler 4.153.0 redirects its create command to a Workers deploy
 of the current directory when it detects an agent session, while
 `POST /accounts/{id}/pages/projects` creates a classic Pages project
-with `name` and `production_branch` across Wrangler versions. It does not create a Cloudflare
-account, create a KV namespace, or bind a KV namespace to a Pages
-project -- there's no single wrangler CLI verb for the last one (it's a
-one-time dashboard action), so the wizard prints the exact command or
-dashboard step and asks you to supply the resulting id instead of trying
-to fake automating it.
+with `name` and `production_branch` across Wrangler versions. The KV
+namespace and its binding go through the same curl path:
+`kv_namespace_find` lists `GET /accounts/{id}/storage/kv/namespaces`,
+`kv_namespace_create` posts `{"title": "<project>-tombstones"}` there,
+and `pages_project_bind_kv` PATCHes the Pages project's
+`deployment_configs.{production,preview}.kv_namespaces.TOMBSTONES`. The
+token needs no scope beyond the two above. It does not create a
+Cloudflare account.
 
 ## The wipe-by-deploy hazard, and the git fix (read this)
 
@@ -156,14 +158,26 @@ automatically, mirroring notes.ito.com's model and ordering:
      and your Cloudflare account id,
    - create that Pages project if your account does not already have one
      by that name, using the Pages REST API,
-   - print the command to create a KV namespace
-     (`wrangler kv namespace create <project>-tombstones`, using your selected
-     executable) and ask
-     for the resulting id,
-   - print the dashboard step to bind that namespace to the Pages
-     project's Settings -> Functions -> KV namespace bindings under the
-     exact binding name `TOMBSTONES` (the deployed middleware reads it
-     as `env.TOMBSTONES` -- a typo here makes purge silently do nothing),
+   - create a KV namespace named `<project>-tombstones`, or reuse one
+     that already exists under that name (it lists first and never makes
+     a duplicate),
+   - bind it to the Pages project under the exact name `TOMBSTONES` on
+     both production and preview, before the first deploy (the deployed
+     middleware reads it as `env.TOMBSTONES`; a missing or misnamed
+     binding makes purge silently do nothing). The PATCH sends only
+     `kv_namespaces`, repeating any other bindings the project already
+     has; the wizard then reads the project back and refuses unless
+     `TOMBSTONES` points at that namespace on both environments and no
+     other `deployment_configs` setting was dropped or changed,
+   - on a re-run against a project that already binds `TOMBSTONES` on
+     both environments, change nothing and keep that namespace (its
+     tombstones live there); if only production binds it, keep
+     production's namespace and bind preview to it too,
+   - if Cloudflare refuses any of those calls, say which one, then fall
+     back to the manual steps: print
+     `wrangler kv namespace create <project>-tombstones` (using your
+     selected executable) and the dashboard step (Settings -> Functions
+     -> KV namespace bindings, name `TOMBSTONES`), and ask for the id,
    - install the middleware, `_headers`, and root index into
      `~/.jimemo/cloudflare/<project>/` -- the persistent local state
      directory `jimemo publish` deploys from every time, not a one-off
@@ -210,7 +224,8 @@ automatically, mirroring notes.ito.com's model and ordering:
    this live test is still needed to verify the binding. A `200` instead
    of `404` after purging can mean the `TOMBSTONES` KV
    binding is missing or misnamed in the Pages project's dashboard
-   settings -- go back and re-check step 4's binding step. Cloudflare
+   settings (Settings -> Functions -> KV namespace bindings) -- the
+   wizard's read-back checks the project config, not a live request. Cloudflare
    KV's read-cache means a 404 may take up to ~60 seconds to appear
    everywhere even once the binding is correct.
 
