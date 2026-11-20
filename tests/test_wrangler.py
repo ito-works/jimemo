@@ -854,3 +854,61 @@ def test_constructor_executable_overrides_environment(tmp_path):
     assert w.check_available()
     assert w.executable == str(executable)
     assert json.loads(w.kv_get("ns", "key"))[0] == "kv"
+
+
+def _failing_after_output_wrangler(tmp_path, body, stdout="", code=1):
+    """A mock wrangler that appends ``body`` to WRANGLER_OUTPUT_FILE_PATH,
+    prints ``stdout``, and then exits ``code`` -- a deploy whose upload
+    ran but whose process failed afterwards (jimemo#cf0d)."""
+    executable = tmp_path / "mock-wrangler-fails"
+    executable.write_text(
+        f"#!{sys.executable}\n"
+        "import os, sys\n"
+        "path = os.environ['WRANGLER_OUTPUT_FILE_PATH']\n"
+        f"open(path, 'a').write({body!r})\n"
+        f"sys.stdout.write({stdout!r})\n"
+        "sys.stderr.write('ENOSPC: no space left on device')\n"
+        f"sys.exit({code})\n"
+    )
+    executable.chmod(0o755)
+    return Wrangler(executable=str(executable))
+
+
+def test_pages_deploy_nonzero_exit_after_a_record_is_unverified(tmp_path):
+    from jimemo.publish.wrangler import DeployUnverifiedError
+
+    deploy = tmp_path / "deploy"
+    deploy.mkdir()
+    w = _failing_after_output_wrangler(
+        tmp_path, '{"type": "pages-deploy", "deployment_id": "dep-9"}\n')
+    with pytest.raises(DeployUnverifiedError) as exc:
+        w.pages_deploy("p", deploy)
+    assert "dep-9" in str(exc.value)
+    assert "exit 1" in str(exc.value)
+    assert "ENOSPC" in str(exc.value)
+
+
+def test_pages_deploy_nonzero_exit_after_completion_line_is_unverified(tmp_path):
+    """The record write itself can be what failed (ENOSPC on wrangler's
+    append), so wrangler's own completion line is evidence too."""
+    from jimemo.publish.wrangler import DeployUnverifiedError
+
+    deploy = tmp_path / "deploy"
+    deploy.mkdir()
+    w = _failing_after_output_wrangler(
+        tmp_path, "",
+        stdout="✨ Deployment complete! Take a peek over at https://x.pages.dev\n")
+    with pytest.raises(DeployUnverifiedError, match="exit 1"):
+        w.pages_deploy("p", deploy)
+
+
+@pytest.mark.parametrize("body", ["", '{"type": "wrangler-session"}\n'])
+def test_pages_deploy_nonzero_exit_with_no_record_is_a_plain_failure(tmp_path, body):
+    from jimemo.publish.wrangler import DeployUnverifiedError
+
+    deploy = tmp_path / "deploy"
+    deploy.mkdir()
+    w = _failing_after_output_wrangler(tmp_path, body, stdout="Uploading...\n")
+    with pytest.raises(PublishError, match="exit 1") as exc:
+        w.pages_deploy("p", deploy)
+    assert not isinstance(exc.value, DeployUnverifiedError)

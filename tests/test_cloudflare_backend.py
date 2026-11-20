@@ -788,6 +788,57 @@ def test_publish_still_rolls_back_when_nothing_was_uploaded(tmp_path):
     assert [p.name for p in (tmp_path / "state").iterdir() if len(p.name) == 24] == []
 
 
+def _wrangler_exiting_nonzero(tmp_path, body):
+    """A real Wrangler over a mock executable that appends ``body`` to
+    WRANGLER_OUTPUT_FILE_PATH and then exits 1 (jimemo#cf0d)."""
+    import sys
+    executable = tmp_path / "mock-wrangler"
+    executable.write_text(
+        f"#!{sys.executable}\n"
+        "import os, sys\n"
+        f"open(os.environ['WRANGLER_OUTPUT_FILE_PATH'], 'a').write({body!r})\n"
+        "sys.stderr.write('ENOSPC: no space left on device')\n"
+        "sys.exit(1)\n"
+    )
+    executable.chmod(0o755)
+    real = Wrangler(executable=str(executable))
+
+    class Wrapped(MockWrangler):
+        def pages_deploy(self, project, directory, branch="main"):
+            self.calls.append(("pages_deploy", project))
+            return real.pages_deploy(project, directory, branch)
+
+    return Wrapped()
+
+
+def test_publish_keeps_the_page_when_wrangler_fails_after_the_upload(tmp_path):
+    html = tmp_path / "page.html"
+    html.write_text("<html>hello</html>")
+    publisher = _publisher(
+        tmp_path, wrangler=_wrangler_exiting_nonzero(
+            tmp_path, '{"type": "pages-deploy", "deployment_id": "dep-7"}\n'))
+    with pytest.raises(DeployUnverifiedError) as exc:
+        publisher.publish(html)
+
+    staged = [p.name for p in (tmp_path / "state").iterdir() if len(p.name) == 24]
+    assert len(staged) == 1
+    assert f"https://friend-notes.pages.dev/{staged[0]}/" in str(exc.value)
+    assert "dep-7" in str(exc.value)
+    assert [r["hash"] for r in publisher.list()] == staged
+
+
+def test_publish_rolls_back_when_wrangler_fails_with_no_record(tmp_path):
+    html = tmp_path / "page.html"
+    html.write_text("<html>hello</html>")
+    publisher = _publisher(
+        tmp_path, wrangler=_wrangler_exiting_nonzero(tmp_path, ""))
+    with pytest.raises(PublishError, match="exit 1") as exc:
+        publisher.publish(html)
+
+    assert not isinstance(exc.value, DeployUnverifiedError)
+    assert [p.name for p in (tmp_path / "state").iterdir() if len(p.name) == 24] == []
+
+
 def test_deploy_passes_its_own_deployment_id_to_the_check(tmp_path):
     seen = []
 
