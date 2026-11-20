@@ -755,13 +755,17 @@ def test_pages_deploy_reports_no_id_when_wrangler_wrote_none(tmp_path, body):
     assert result.deployment_id is None
 
 
-def test_pages_deploy_env_adds_only_the_output_path(tmp_path):
+def test_pages_deploy_env_adds_only_the_output_path_and_log_level(
+        tmp_path, monkeypatch):
+    monkeypatch.delenv("WRANGLER_LOG", raising=False)
     runner = FakeRunner(CompletedProcess([], 0, stdout="", stderr=""))
     Wrangler(runner=runner, account_id="acct-9").pages_deploy("p", tmp_path)
     env, = runner.envs
     added = {k: v for k, v in env.items() if os.environ.get(k) != v}
-    assert set(added) == {"WRANGLER_OUTPUT_FILE_PATH", "CLOUDFLARE_ACCOUNT_ID"}
+    assert set(added) == {"WRANGLER_OUTPUT_FILE_PATH", "CLOUDFLARE_ACCOUNT_ID",
+                          "WRANGLER_LOG"}
     assert added["CLOUDFLARE_ACCOUNT_ID"] == "acct-9"
+    assert added["WRANGLER_LOG"] == "log"
 
 
 @pytest.mark.parametrize("stdout,code,match", [
@@ -903,12 +907,73 @@ def test_pages_deploy_nonzero_exit_after_completion_line_is_unverified(tmp_path)
 
 
 @pytest.mark.parametrize("body", ["", '{"type": "wrangler-session"}\n'])
-def test_pages_deploy_nonzero_exit_with_no_record_is_a_plain_failure(tmp_path, body):
+def test_pages_deploy_nonzero_exit_with_no_evidence_is_unverified(tmp_path, body):
+    """No record and no line either way: wrangler may have died after
+    creating the deployment (a failed record write, a kill, a silenced
+    log), so the page may be live (jimemo#cf0d review)."""
     from jimemo.publish.wrangler import DeployUnverifiedError
 
     deploy = tmp_path / "deploy"
     deploy.mkdir()
     w = _failing_after_output_wrangler(tmp_path, body, stdout="Uploading...\n")
+    with pytest.raises(DeployUnverifiedError, match="exit 1"):
+        w.pages_deploy("p", deploy)
+
+
+COMMAND_FAILED = ('{"type": "command-failed", "version": 1, '
+                  '"message": "Authentication error"}\n')
+
+
+def test_pages_deploy_failure_before_the_upload_is_a_plain_failure(tmp_path):
+    """wrangler's own command-failed record, with no upload-complete
+    line, is positive evidence the failure preceded the deployment."""
+    from jimemo.publish.wrangler import DeployUnverifiedError
+
+    deploy = tmp_path / "deploy"
+    deploy.mkdir()
+    w = _failing_after_output_wrangler(
+        tmp_path, '{"type": "wrangler-session"}\n' + COMMAND_FAILED,
+        stdout="Uploading... (0/1)\n")
     with pytest.raises(PublishError, match="exit 1") as exc:
         w.pages_deploy("p", deploy)
     assert not isinstance(exc.value, DeployUnverifiedError)
+
+
+def test_pages_deploy_failure_after_the_upload_line_is_unverified(tmp_path):
+    """Once wrangler reports the file upload complete it goes on to create
+    the deployment, so a command-failed record no longer proves it did not."""
+    from jimemo.publish.wrangler import DeployUnverifiedError
+
+    deploy = tmp_path / "deploy"
+    deploy.mkdir()
+    w = _failing_after_output_wrangler(
+        tmp_path, COMMAND_FAILED,
+        stdout="✨ Success! Uploaded 1 files (0.42 sec)\n")
+    with pytest.raises(DeployUnverifiedError, match="exit 1"):
+        w.pages_deploy("p", deploy)
+
+
+@pytest.mark.parametrize("inherited, seen", [
+    (None, "log"), ("error", "log"), ("none", "log"), ("warn", "log"),
+    ("info", "log"), ("log", "log"), ("debug", "debug"), ("DEBUG", "DEBUG"),
+])
+def test_pages_deploy_keeps_wrangler_log_at_least_log(tmp_path, monkeypatch,
+                                                      inherited, seen):
+    """The classification reads wrangler's log lines, so an inherited
+    WRANGLER_LOG below "log" must not silence them."""
+    if inherited is None:
+        monkeypatch.delenv("WRANGLER_LOG", raising=False)
+    else:
+        monkeypatch.setenv("WRANGLER_LOG", inherited)
+    record = tmp_path / "level.txt"
+    executable = tmp_path / "mock-wrangler-level"
+    executable.write_text(
+        f"#!{sys.executable}\n"
+        "import os\n"
+        f"open({str(record)!r}, 'w').write(os.environ.get('WRANGLER_LOG', ''))\n"
+    )
+    executable.chmod(0o755)
+    deploy = tmp_path / "deploy"
+    deploy.mkdir()
+    Wrangler(executable=str(executable)).pages_deploy("p", deploy)
+    assert record.read_text() == seen

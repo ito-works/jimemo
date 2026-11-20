@@ -827,11 +827,27 @@ def test_publish_keeps_the_page_when_wrangler_fails_after_the_upload(tmp_path):
     assert [r["hash"] for r in publisher.list()] == staged
 
 
-def test_publish_rolls_back_when_wrangler_fails_with_no_record(tmp_path):
+def test_publish_keeps_the_page_when_wrangler_fails_with_no_evidence(tmp_path):
+    """No record and no command-failed entry: the outcome is unknown, so
+    the page is kept and its URL named (jimemo#cf0d review)."""
     html = tmp_path / "page.html"
     html.write_text("<html>hello</html>")
     publisher = _publisher(
         tmp_path, wrangler=_wrangler_exiting_nonzero(tmp_path, ""))
+    with pytest.raises(DeployUnverifiedError) as exc:
+        publisher.publish(html)
+
+    staged = [p.name for p in (tmp_path / "state").iterdir() if len(p.name) == 24]
+    assert len(staged) == 1
+    assert f"https://friend-notes.pages.dev/{staged[0]}/" in str(exc.value)
+
+
+def test_publish_rolls_back_when_wrangler_fails_before_the_upload(tmp_path):
+    html = tmp_path / "page.html"
+    html.write_text("<html>hello</html>")
+    publisher = _publisher(
+        tmp_path, wrangler=_wrangler_exiting_nonzero(
+            tmp_path, '{"type": "command-failed", "version": 1}\n'))
     with pytest.raises(PublishError, match="exit 1") as exc:
         publisher.publish(html)
 
