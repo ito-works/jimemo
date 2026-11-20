@@ -206,12 +206,16 @@ contract in detail.
     parses the published URL from its stdout. Keeps an existing site
     (like notes.ito.com) authoritative; jimemo is just a thin wrapper.
   - `wrangler.py` — the `Wrangler` seam: narrow methods
-    (`check_available`, `pages_project_names`, `pages_project_create`,
-    `pages_deploy`, `kv_put`, `kv_get`, `kv_list`) wrapping the `wrangler`
-    executable on PATH (overridden by `JIMEMO_WRANGLER`), with no implicit
-    package download, plus three (`curl_version`, `pages_project_fail_open`,
-    `pages_project_set_fail_closed`) that reach the Pages project REST API
-    through `curl` for the one setting wrangler cannot (`fail_open`), and a
+    (`check_available`, `pages_project_names`, `pages_deploy`, `kv_put`,
+    `kv_get`, `kv_list`) wrapping the `wrangler` executable on PATH
+    (overridden by `JIMEMO_WRANGLER`), with no implicit package download,
+    plus six that reach the Pages REST API through `curl`: `curl_version`,
+    `pages_project_fail_open` and `pages_project_set_fail_closed` for the
+    one setting wrangler cannot reach (`fail_open`), `pages_project_create`
+    (wrangler's own create command can redirect to Workers), and
+    `pages_project_production_deployment_id` with
+    `pages_project_require_functions`, which confirm after each deploy that
+    the upload became the production deployment with its Functions bundle; and a
     `MockWrangler` for tests. Auth is never touched by jimemo — wrangler resolves its own
     `CLOUDFLARE_API_TOKEN` from the environment or its own credential
     store (setup and every deploy of the cloudflare backend need the

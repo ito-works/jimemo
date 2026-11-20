@@ -37,6 +37,7 @@ import os
 import re
 import shutil
 import subprocess
+import time
 from pathlib import Path
 from subprocess import CompletedProcess
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
@@ -95,6 +96,19 @@ def _run(argv: List[str], env: Optional[Dict[str, str]] = None,
     return subprocess.run(argv, capture_output=True, text=True, env=env, cwd=cwd)
 
 
+#: Post-deploy confirmation (pages_project_require_functions): how many
+#: times the project is read, and the pause between reads, while waiting
+#: for this upload to become the production deployment.
+VERIFY_ATTEMPTS = 10
+VERIFY_DELAY_S = 3.0
+
+
+class DeployUnverifiedError(PublishError):
+    """The upload ran, but the new production deployment could not be
+    confirmed to carry the Functions bundle. Unlike every other
+    PublishError from a deploy, the uploaded tree may be live."""
+
+
 class PagesProjectExistsError(PublishError):
     """The Pages create endpoint reports duplicate project code 8000002."""
 
@@ -130,8 +144,10 @@ class Wrangler:
         executable: Optional[str] = None,
         account_id: Optional[str] = None,
         curl: str = "curl",
+        sleep: Callable[[float], None] = time.sleep,
     ):
         self._run = runner
+        self._sleep = sleep
         # Resolve once, before deploy can change subprocess cwd. A wrapper
         # path is one argv element, never a shell command or an npm package.
         selected = (executable if executable is not None
@@ -359,19 +375,61 @@ class Wrangler:
         """``{"production": is_open, "preview": is_open}`` for the project."""
         return self._open_flags(self._cf_api("GET", project))
 
-    def pages_project_require_functions(self, project: str) -> None:
-        """Refuse unless the production deployment reports a Functions bundle.
+    def _production_deployment(self, project: str) -> Dict[str, Any]:
+        """The project's ``canonical_deployment`` (its current production
+        deployment), or ``{}`` when the project has none."""
+        deployment = self._cf_api("GET", project).get("canonical_deployment")
+        return deployment if isinstance(deployment, dict) else {}
+
+    def pages_project_production_deployment_id(self, project: str) -> Optional[str]:
+        """Id of the current production deployment, or None when there is
+        none. Read BEFORE a deploy so pages_project_require_functions can
+        tell this upload from the deployment it replaces."""
+        dep_id = self._production_deployment(project).get("id")
+        return dep_id if isinstance(dep_id, str) and dep_id else None
+
+    def pages_project_require_functions(
+        self, project: str, previous_deployment_id: Optional[str] = None
+    ) -> None:
+        """Refuse unless THIS upload became the production deployment and
+        reports a Functions bundle.
+
+        ``previous_deployment_id`` is what
+        pages_project_production_deployment_id returned before the deploy
+        (None: there was no production deployment). A production
+        deployment with a different id is the new one; the old one
+        reporting uses_functions=true proves nothing about this upload, so
+        the project is re-read up to VERIFY_ATTEMPTS times until the id
+        changes. Raises DeployUnverifiedError when the new deployment does
+        not report uses_functions=true, or never shows up.
 
         This checks deployment metadata, not the live TOMBSTONES binding.
         """
-        deployment = self._cf_api("GET", project).get("canonical_deployment")
-        if not isinstance(deployment, dict) or deployment.get("uses_functions") is not True:
-            raise PublishError(
-                f"Pages project {project!r}: production deployment does not confirm "
-                "uses_functions=true; tombstone/purge protection may be absent. "
-                "Check the deployment's Functions bundle and retry "
+        seen = "the project reports no production deployment"
+        for attempt in range(VERIFY_ATTEMPTS):
+            if attempt:
+                self._sleep(VERIFY_DELAY_S)
+            deployment = self._production_deployment(project)
+            dep_id = deployment.get("id")
+            if not (isinstance(dep_id, str) and dep_id):
+                continue
+            if dep_id == previous_deployment_id:
+                seen = f"production is still the earlier deployment {dep_id}"
+                continue
+            if deployment.get("uses_functions") is True:
+                return
+            raise DeployUnverifiedError(
+                f"Pages project {project!r}: production deployment {dep_id} does "
+                "not confirm uses_functions=true; tombstone/purge protection may "
+                "be absent. Check the deployment's Functions bundle and retry "
                 "`jimemo publish setup --assets-only`"
             )
+        raise DeployUnverifiedError(
+            f"Pages project {project!r}: could not confirm uses_functions=true "
+            f"for this upload: after {VERIFY_ATTEMPTS} reads {seen}. "
+            "Tombstone/purge protection may be absent; check the project's "
+            "deployments and retry `jimemo publish setup --assets-only`"
+        )
 
     def pages_project_set_fail_closed(self, project: str) -> None:
         """PATCH fail_open=false on both environments, then re-read and
@@ -444,6 +502,7 @@ class MockWrangler:
         executable: str = "wrangler",
     ):
         self.executable = executable
+        self._deploys = 0
         self.calls: List[tuple] = []
         self._kv: Dict[str, str] = {}
         self._deploy_stdout = deploy_stdout
@@ -459,6 +518,7 @@ class MockWrangler:
         self, project: str, directory: Union[str, Path], branch: str = "main"
     ) -> CompletedProcess:
         self.calls.append(("pages_deploy", project, str(directory), branch))
+        self._deploys += 1
         return CompletedProcess([], 0, stdout=self._deploy_stdout, stderr="")
 
     def pages_project_names(self) -> List[str]:
@@ -482,7 +542,13 @@ class MockWrangler:
         self.calls.append(("pages_project_fail_open", project))
         return dict(self.fail_open)
 
-    def pages_project_require_functions(self, project: str) -> None:
+    def pages_project_production_deployment_id(self, project: str) -> Optional[str]:
+        self.calls.append(("pages_project_production_deployment_id", project))
+        return f"deploy-{self._deploys}" if self._deploys else None
+
+    def pages_project_require_functions(
+        self, project: str, previous_deployment_id: Optional[str] = None
+    ) -> None:
         self.calls.append(("pages_project_require_functions", project))
 
     def pages_project_set_fail_closed(self, project: str) -> None:

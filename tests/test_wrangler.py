@@ -631,21 +631,71 @@ def test_deploy_discovers_functions_from_deploy_directory(tmp_path, monkeypatch,
     assert Path.cwd() == caller
 
 
-@pytest.mark.parametrize("deployment", [None, {}, {"uses_functions": False},
-                                         {"uses_functions": "true"}, {"uses_functions": 1}])
-def test_functions_check_refuses_unconfirmed_bundle(monkeypatch, deployment):
-    response = json.dumps({"success": True, "result": {"canonical_deployment": deployment}})
-    w, runner = _wrangler_with_token(monkeypatch, _ok(response))
-    with pytest.raises(PublishError, match="uses_functions=true"):
-        w.pages_project_require_functions("friend-notes")
+def _deployment_json(deployment):
+    return _ok(json.dumps({"success": True, "result": {"canonical_deployment": deployment}}))
+
+
+def _verifying_wrangler(monkeypatch, *results):
+    """A Wrangler whose post-deploy waits are recorded, not slept."""
+    from jimemo.publish.wrangler import Wrangler as W
+
+    monkeypatch.setenv("CLOUDFLARE_API_TOKEN", "x")
+    runner = FakeRunner(*results)
+    sleeps = []
+    return W(runner=runner, account_id="acct-1", sleep=sleeps.append), runner, sleeps
+
+
+@pytest.mark.parametrize("deployment", [
+    {"id": "new", "uses_functions": False}, {"id": "new", "uses_functions": "true"},
+    {"id": "new", "uses_functions": 1}, {"id": "new"}])
+def test_functions_check_refuses_a_new_deployment_without_the_bundle(monkeypatch, deployment):
+    from jimemo.publish.wrangler import DeployUnverifiedError
+
+    w, runner, sleeps = _verifying_wrangler(monkeypatch, _deployment_json(deployment))
+    with pytest.raises(DeployUnverifiedError, match="uses_functions=true"):
+        w.pages_project_require_functions("friend-notes", "old")
+    # The new deployment answered: a definite refusal, no waiting.
+    assert len(runner.calls) == 1 and sleeps == []
     assert runner.calls[0][-1] == PROJECT_URL
 
 
-def test_functions_check_accepts_confirmed_production_bundle(monkeypatch):
-    response = json.dumps({"success": True, "result": {
-        "canonical_deployment": {"uses_functions": True}}})
-    w, _ = _wrangler_with_token(monkeypatch, _ok(response))
-    w.pages_project_require_functions("friend-notes")
+@pytest.mark.parametrize("deployment", [
+    None, {}, {"uses_functions": True}, {"id": "", "uses_functions": True},
+    # The deployment from BEFORE this upload proves nothing about it.
+    {"id": "old", "uses_functions": True}])
+def test_functions_check_refuses_when_the_upload_never_becomes_production(monkeypatch, deployment):
+    from jimemo.publish.wrangler import (
+        VERIFY_ATTEMPTS, VERIFY_DELAY_S, DeployUnverifiedError)
+
+    w, runner, sleeps = _verifying_wrangler(monkeypatch, _deployment_json(deployment))
+    with pytest.raises(DeployUnverifiedError, match="uses_functions=true"):
+        w.pages_project_require_functions("friend-notes", "old")
+    assert len(runner.calls) == VERIFY_ATTEMPTS
+    assert sleeps == [VERIFY_DELAY_S] * (VERIFY_ATTEMPTS - 1)
+
+
+def test_functions_check_waits_for_delayed_activation(monkeypatch):
+    old = _deployment_json({"id": "old", "uses_functions": True})
+    new = _deployment_json({"id": "new", "uses_functions": True})
+    w, runner, sleeps = _verifying_wrangler(monkeypatch, old, old, new)
+    w.pages_project_require_functions("friend-notes", "old")
+    assert len(runner.calls) == 3 and len(sleeps) == 2
+
+
+def test_functions_check_accepts_a_first_production_deployment(monkeypatch):
+    w, runner, sleeps = _verifying_wrangler(
+        monkeypatch, _deployment_json({"id": "first", "uses_functions": True}))
+    w.pages_project_require_functions("friend-notes", None)
+    assert len(runner.calls) == 1 and sleeps == []
+
+
+@pytest.mark.parametrize("deployment,expected", [
+    (None, None), ({}, None), ({"id": ""}, None), ({"id": 7}, None),
+    ({"id": "abc"}, "abc")])
+def test_production_deployment_id(monkeypatch, deployment, expected):
+    w, runner, _ = _verifying_wrangler(monkeypatch, _deployment_json(deployment))
+    assert w.pages_project_production_deployment_id("friend-notes") == expected
+    assert runner.calls[0][-1] == PROJECT_URL
 
 
 @pytest.mark.parametrize("stdout,code,match", [

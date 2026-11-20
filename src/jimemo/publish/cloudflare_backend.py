@@ -46,7 +46,7 @@ from ..errors import PublishError
 from . import gitsync
 from . import Publisher
 from .staging import stage_page
-from .wrangler import NO_WRANGLER_MESSAGE, Wrangler
+from .wrangler import DeployUnverifiedError, NO_WRANGLER_MESSAGE, Wrangler
 
 _HASH_RE = re.compile(r"^[a-f0-9]{24}$")
 
@@ -241,6 +241,31 @@ def require_fail_closed(wrangler, project: str) -> None:
         ))
 
 
+def deploy_and_verify(wrangler, project: str, deploy_dir: Path) -> None:
+    """Deploy ``deploy_dir`` and confirm the upload became the production
+    deployment with its Functions bundle. Shared by publish()/gc()/
+    refresh_assets() and setup's own deploy.
+
+    Two different failures leave here. A PublishError that is not a
+    DeployUnverifiedError means nothing was uploaded (the read of the
+    current deployment id, or the deploy itself, failed). A
+    DeployUnverifiedError means the upload ran and may be live, but the
+    confirmation refused or could not be made (an API error or timeout
+    after the upload counts): callers must not roll local state back as
+    if the deploy had not happened.
+    """
+    previous = wrangler.pages_project_production_deployment_id(project)
+    wrangler.pages_deploy(project, deploy_dir)
+    try:
+        wrangler.pages_project_require_functions(project, previous)
+    except DeployUnverifiedError:
+        raise
+    except PublishError as exc:
+        raise DeployUnverifiedError(
+            f"the upload ran but could not be verified: {exc}"
+        ) from exc
+
+
 class CloudflarePublisher(Publisher):
     """Publisher backed by a Cloudflare Pages project + tombstone KV
     namespace, driven through the Wrangler seam. See module docstring
@@ -286,8 +311,7 @@ class CloudflarePublisher(Publisher):
         require_fail_closed(self._wrangler, self._cf.project)
         with tempfile.TemporaryDirectory(prefix="jimemo-deploy-") as tmp:
             deploy_dir = _build_deploy_dir(self._state_dir, Path(tmp))
-            self._wrangler.pages_deploy(self._cf.project, deploy_dir)
-            self._wrangler.pages_project_require_functions(self._cf.project)
+            deploy_and_verify(self._wrangler, self._cf.project, deploy_dir)
 
     def publish(self, html_path: Path, title: Optional[str] = None) -> str:
         """Stage html_path as a new hash directory and redeploy the whole
@@ -319,6 +343,11 @@ class CloudflarePublisher(Publisher):
         actually served -- an orphan URL that looks live in
         `list()`/`gc()` bookkeeping but 404s. Only a successful deploy
         leaves the staged hash in persistent state.
+
+        One exception: a DeployUnverifiedError (see deploy_and_verify)
+        means the upload ran and the page may be live. The staged hash is
+        KEPT, so `list` still shows it and a later deploy still carries
+        it, and the error names the URL.
         """
         self._ensure_wrangler_available()
         self._state_dir.mkdir(parents=True, exist_ok=True)
@@ -350,6 +379,12 @@ class CloudflarePublisher(Publisher):
                 gitsync.verify_fresh(self._state_dir)
         try:
             self._deploy_state_dir()
+        except DeployUnverifiedError as exc:
+            url = f"{self._cf.base_url.rstrip('/')}/{page_hash}/"
+            raise DeployUnverifiedError(
+                f"{exc}. The page was uploaded and may be live at {url} "
+                f"without purge protection; it is kept in {self._state_dir}"
+            ) from exc
         except Exception as exc:
             if not sync:
                 # Best-effort: only remove the hash dir THIS call just

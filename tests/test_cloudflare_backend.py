@@ -13,7 +13,7 @@ from jimemo.publish.cloudflare_backend import (
     CloudflarePublisher,
     _ensure_state_dir_assets,
 )
-from jimemo.publish.wrangler import MockWrangler, Wrangler
+from jimemo.publish.wrangler import DeployUnverifiedError, MockWrangler, Wrangler
 
 HASH_RE = re.compile(r"[a-f0-9]{24}")
 
@@ -744,13 +744,62 @@ def test_require_fail_closed_passes_when_closed():
     require_fail_closed(MockWrangler(), "friend-notes")
 
 
-def test_publish_refuses_success_without_deployed_functions(tmp_path):
-    class MissingFunctionsWrangler(MockWrangler):
-        def pages_project_require_functions(self, project):
-            raise PublishError("production deployment does not confirm uses_functions=true")
+@pytest.mark.parametrize("error", [
+    DeployUnverifiedError("production deployment does not confirm uses_functions=true"),
+    # Any failure of the check itself (API error, curl timeout) arrives
+    # after the upload too.
+    PublishError("curl GET Pages project 'p' failed (exit 28): timed out"),
+])
+def test_publish_keeps_the_page_when_the_upload_cannot_be_verified(tmp_path, error):
+    """The upload ran, so the page may be live: its hash must stay in the
+    state dir (list() shows it, the next deploy carries it) and the error
+    must name its URL."""
+    class UnverifiedWrangler(MockWrangler):
+        def pages_project_require_functions(self, project, previous_deployment_id=None):
+            raise error
 
     html = tmp_path / "page.html"
     html.write_text("<html>hello</html>")
-    publisher = _publisher(tmp_path, wrangler=MissingFunctionsWrangler())
-    with pytest.raises(PublishError, match="uses_functions=true"):
+    wrangler = UnverifiedWrangler()
+    publisher = _publisher(tmp_path, wrangler=wrangler)
+    with pytest.raises(DeployUnverifiedError) as exc:
         publisher.publish(html)
+
+    assert str(error) in str(exc.value)
+    staged = [p.name for p in (tmp_path / "state").iterdir() if len(p.name) == 24]
+    assert len(staged) == 1
+    assert f"https://friend-notes.pages.dev/{staged[0]}/" in str(exc.value)
+    assert [r["hash"] for r in publisher.list()] == staged
+    assert "pages_deploy" in [c[0] for c in wrangler.calls]
+
+
+def test_publish_still_rolls_back_when_nothing_was_uploaded(tmp_path):
+    class FailingDeployWrangler(MockWrangler):
+        def pages_deploy(self, project, directory, branch="main"):
+            raise PublishError("wrangler pages deploy failed (exit 1): boom")
+
+    html = tmp_path / "page.html"
+    html.write_text("<html>hello</html>")
+    publisher = _publisher(tmp_path, wrangler=FailingDeployWrangler())
+    with pytest.raises(PublishError, match="boom") as exc:
+        publisher.publish(html)
+
+    assert not isinstance(exc.value, DeployUnverifiedError)
+    assert [p.name for p in (tmp_path / "state").iterdir() if len(p.name) == 24] == []
+
+
+def test_deploy_passes_the_pre_deploy_deployment_id_to_the_check(tmp_path):
+    seen = []
+
+    class RecordingWrangler(MockWrangler):
+        def pages_project_require_functions(self, project, previous_deployment_id=None):
+            seen.append(previous_deployment_id)
+
+    html = tmp_path / "page.html"
+    html.write_text("<html>hello</html>")
+    publisher = _publisher(tmp_path, wrangler=RecordingWrangler())
+    publisher.publish(html)
+    publisher.publish(html)
+
+    # None before the first deploy, then the id the first deploy produced.
+    assert seen == [None, "deploy-1"]
