@@ -703,7 +703,9 @@ class Wrangler:
         then read the project back. Raises KVBindingError unless the
         read-back shows exactly that binding on both environments and
         every other deployment_configs setting present before the PATCH
-        is still present and unchanged (keys the API adds are allowed)."""
+        is still present and unchanged (keys the API adds are allowed;
+        null and an empty container are the same setting) -- see
+        kv_binding_problems."""
         before = self._env_configs(self._cf_api("GET", project))
         existing = {env: self._kv_map(cfg) for env, cfg in before.items()}
         self._cf_api("PATCH", project,
@@ -719,27 +721,7 @@ class Wrangler:
                 "project's KV namespace bindings (Settings -> Functions) and "
                 "re-run `jimemo publish setup`"
             ) from e
-        problems = []
-        for env in ("production", "preview"):
-            bound = self._bound_id(after[env], binding)
-            if bound != namespace_id:
-                problems.append(
-                    f"{env}: {binding} is "
-                    + (f"bound to {bound}" if bound else "not bound")
-                    + f" (expected {namespace_id})"
-                )
-            changed = sorted(
-                key for key, value in before[env].items()
-                if key != "kv_namespaces" and after[env].get(key) != value
-            )
-            changed += sorted(
-                f"kv_namespaces.{name}"
-                for name, value in existing[env].items()
-                if name != binding and self._kv_map(after[env]).get(name) != value
-            )
-            if changed:
-                problems.append(f"{env}: the PATCH dropped or changed "
-                                + ", ".join(changed))
+        problems = kv_binding_problems(before, after, binding, namespace_id)
         if problems:
             raise KVBindingError(
                 f"Pages project {project!r}: after binding {binding} the "
@@ -789,6 +771,57 @@ class Wrangler:
             )
 
 
+def _empty(value: Any) -> bool:
+    return value is None or value == {} or value == []
+
+
+def _same_setting(before: Any, after: Any) -> bool:
+    """Cloudflare normalises an unset container on a PATCH: a fresh
+    project's ``env_vars`` is null and reads ``{}`` after the
+    kv_namespaces PATCH (jimemo#1qjw). Null and an empty map or list are
+    the same setting; any other difference is a change."""
+    return before == after or (_empty(before) and _empty(after))
+
+
+def kv_binding_problems(
+    before: Dict[str, Dict[str, Any]], after: Dict[str, Dict[str, Any]],
+    binding: str, namespace_id: str,
+) -> List[str]:
+    """What is wrong with a project read back after the binding PATCH,
+    as one line per environment; empty when it reads back right.
+    ``before``/``after`` map each environment to its deployment config.
+    Wrong: ``binding`` not bound to exactly ``namespace_id``; a key
+    present before missing after, whatever its value; a value changed
+    (null and an empty container count as equal); another KV binding
+    dropped or changed. Keys the API adds are allowed. Shared by
+    Wrangler and MockWrangler, so the mocked setup path runs it too."""
+    problems = []
+    for env in ("production", "preview"):
+        bound = Wrangler._bound_id(after[env], binding)
+        if bound != namespace_id:
+            problems.append(
+                f"{env}: {binding} is "
+                + (f"bound to {bound}" if bound else "not bound")
+                + f" (expected {namespace_id})"
+            )
+        changed = sorted(
+            key for key, value in before[env].items()
+            if key != "kv_namespaces"
+            and (key not in after[env]
+                 or not _same_setting(value, after[env][key]))
+        )
+        after_kv = Wrangler._kv_map(after[env])
+        changed += sorted(
+            f"kv_namespaces.{name}"
+            for name, value in Wrangler._kv_map(before[env]).items()
+            if name != binding and after_kv.get(name) != value
+        )
+        if changed:
+            problems.append(f"{env}: the PATCH dropped or changed "
+                            + ", ".join(changed))
+    return problems
+
+
 class MockWrangler:
     """Test double standing in for Wrangler: no subprocess, no npx, no
     network. Records every call (as a tuple, call name first) in
@@ -822,6 +855,28 @@ class MockWrangler:
         #: env -> {binding name: namespace id} on the Pages project.
         self.kv_bindings: Dict[str, Dict[str, str]] = {
             env: dict(bindings or {}) for env in ("production", "preview")}
+        #: env -> the project's other deployment_configs settings, in the
+        #: shapes the API returns (fail_open and kv_namespaces live in
+        #: the two attributes above). An already-provisioned project has
+        #: been PATCHed, so its env_vars reads {}.
+        self.deployment_configs: Dict[str, Dict[str, Any]] = {
+            env: self._api_config(env_vars={}) for env in ("production", "preview")}
+        #: Keys the bind PATCH drops, for refusal tests.
+        self.patch_drops: Tuple[str, ...] = ()
+
+    @staticmethod
+    def _api_config(env_vars: Any) -> Dict[str, Any]:
+        return {"always_use_latest_compatibility_date": False,
+                "compatibility_date": "2026-11-21", "compatibility_flags": [],
+                "build_image_major_version": 3, "usage_model": "standard",
+                "env_vars": env_vars}
+
+    def _configs(self) -> Dict[str, Dict[str, Any]]:
+        return {env: dict(self.deployment_configs[env],
+                          fail_open=self.fail_open[env],
+                          kv_namespaces={name: {"namespace_id": ns}
+                                         for name, ns in self.kv_bindings[env].items()})
+                for env in ("production", "preview")}
 
     def check_available(self) -> bool:
         self.calls.append(("check_available",))
@@ -845,8 +900,11 @@ class MockWrangler:
     ) -> Dict[str, Any]:
         self.calls.append(("pages_project_create", project, branch))
         self._projects.add(project)
-        # Cloudflare's default for a new project: both environments open.
+        # Cloudflare's default for a new project: both environments open,
+        # and env_vars null until a PATCH turns it into {} (jimemo#1qjw).
         self.fail_open = {"production": True, "preview": True}
+        self.deployment_configs = {
+            env: self._api_config(env_vars=None) for env in ("production", "preview")}
         return {"name": project, "production_branch": branch}
 
     def curl_version(self) -> Optional[Tuple[int, int, int]]:
@@ -887,8 +945,20 @@ class MockWrangler:
         self, project: str, binding: str, namespace_id: str
     ) -> None:
         self.calls.append(("pages_project_bind_kv", project, binding, namespace_id))
+        before = self._configs()
         for env in ("production", "preview"):
             self.kv_bindings[env][binding] = namespace_id
+            cfg = self.deployment_configs[env]
+            # What Cloudflare does to a fresh project on this PATCH.
+            if cfg.get("env_vars") is None:
+                cfg["env_vars"] = {}
+            for key in self.patch_drops:
+                cfg.pop(key, None)
+        problems = kv_binding_problems(before, self._configs(), binding, namespace_id)
+        if problems:
+            raise KVBindingError(
+                f"Pages project {project!r}: after binding {binding} the "
+                "project reads back wrong -- " + "; ".join(problems))
 
     def kv_put(self, namespace_id: str, key: str, value: str) -> None:
         self.calls.append(("kv_put", namespace_id, key, value))

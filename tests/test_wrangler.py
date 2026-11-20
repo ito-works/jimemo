@@ -1203,3 +1203,88 @@ def test_mock_wrangler_kv_namespace_and_binding_state():
     assert m.pages_project_kv_binding("p", "TOMBSTONES") == {"production": None, "preview": None}
     m.pages_project_bind_kv("p", "TOMBSTONES", ns)
     assert m.pages_project_kv_binding("p", "TOMBSTONES") == {"production": ns, "preview": ns}
+
+
+# ---------------------------------------------------------------------------
+# jimemo#1qjw: Cloudflare turns a fresh project's env_vars null into {} on
+# the kv_namespaces PATCH. Null and an empty container are the same
+# setting; a removed key or a non-empty value changed or emptied is not.
+# ---------------------------------------------------------------------------
+
+_FRESH = {"fail_open": False, "always_use_latest_compatibility_date": False,
+          "compatibility_date": "2026-11-21", "compatibility_flags": [],
+          "build_image_major_version": 3, "usage_model": "standard",
+          "env_vars": None}
+
+
+def _bound(cfg, **changes):
+    out = dict(cfg, kv_namespaces={"TOMBSTONES": {"namespace_id": "ns-1"}})
+    out.update(changes)
+    return out
+
+
+def test_bind_kv_accepts_env_vars_null_turned_into_an_empty_map(monkeypatch):
+    after = _bound(_FRESH, env_vars={})
+    w, _ = _wrangler_with_token(
+        monkeypatch, _configs_json(_FRESH, _FRESH), _configs_json(after, after),
+        _configs_json(after, after))
+
+    w.pages_project_bind_kv("friend-notes", "TOMBSTONES", "ns-1")
+
+
+@pytest.mark.parametrize("before_value,after_value", [
+    ({}, None), ([], None), (None, []), ([], {})])
+def test_bind_kv_treats_null_and_empty_containers_alike(monkeypatch, before_value, after_value):
+    before = dict(_FRESH, compatibility_flags=before_value)
+    after = _bound(before, compatibility_flags=after_value)
+    w, _ = _wrangler_with_token(
+        monkeypatch, _configs_json(before, before), _configs_json(after, after),
+        _configs_json(after, after))
+
+    w.pages_project_bind_kv("friend-notes", "TOMBSTONES", "ns-1")
+
+
+@pytest.mark.parametrize("after_env_vars", [{}, None, []])
+def test_bind_kv_refuses_non_empty_env_vars_emptied(monkeypatch, after_env_vars):
+    from jimemo.publish.wrangler import KVBindingError
+    before = dict(_FRESH, env_vars={"API_URL": {"type": "plain_text", "value": "x"}})
+    after = _bound(before, env_vars=after_env_vars)
+    w, _ = _wrangler_with_token(
+        monkeypatch, _configs_json(before, before), _configs_json(after, after),
+        _configs_json(after, after))
+
+    with pytest.raises(KVBindingError, match="env_vars"):
+        w.pages_project_bind_kv("friend-notes", "TOMBSTONES", "ns-1")
+
+
+@pytest.mark.parametrize("key", ["env_vars", "compatibility_flags", "usage_model"])
+def test_bind_kv_refuses_a_dropped_key_even_when_it_was_empty(monkeypatch, key):
+    from jimemo.publish.wrangler import KVBindingError
+    after = _bound(_FRESH)
+    del after[key]
+    w, _ = _wrangler_with_token(
+        monkeypatch, _configs_json(_FRESH, _FRESH), _configs_json(after, after),
+        _configs_json(after, after))
+
+    with pytest.raises(KVBindingError, match=key):
+        w.pages_project_bind_kv("friend-notes", "TOMBSTONES", "ns-1")
+
+
+def test_mock_wrangler_fresh_project_has_the_api_shapes():
+    m = MockWrangler()
+    m.pages_project_create("p")
+    assert all(cfg["env_vars"] is None for cfg in m.deployment_configs.values())
+    ns = m.kv_namespace_create("p-tombstones")
+    m.pages_project_bind_kv("p", "TOMBSTONES", ns)
+    assert all(cfg["env_vars"] == {} for cfg in m.deployment_configs.values())
+
+
+def test_mock_wrangler_bind_runs_the_real_read_back_check():
+    # The mock applies the PATCH the way Cloudflare does and then runs the
+    # same comparison as Wrangler, so a regression in it fails setup.
+    from jimemo.publish.wrangler import KVBindingError
+    m = MockWrangler()
+    m.pages_project_create("p")
+    m.patch_drops = ("compatibility_date",)
+    with pytest.raises(KVBindingError, match="compatibility_date"):
+        m.pages_project_bind_kv("p", "TOMBSTONES", "ns-1")
