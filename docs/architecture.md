@@ -209,13 +209,13 @@ contract in detail.
     (`check_available`, `pages_project_names`, `pages_deploy`, `kv_put`,
     `kv_get`, `kv_list`) wrapping the `wrangler` executable on PATH
     (overridden by `JIMEMO_WRANGLER`), with no implicit package download,
-    plus six that reach the Pages REST API through `curl`: `curl_version`,
+    plus five that reach the Pages REST API through `curl`: `curl_version`,
     `pages_project_fail_open` and `pages_project_set_fail_closed` for the
     one setting wrangler cannot reach (`fail_open`), `pages_project_create`
     (wrangler's own create command can redirect to Workers), and
-    `pages_project_production_deployment_id` with
-    `pages_project_require_functions`, which confirm after each deploy that
-    the upload became the production deployment with its Functions bundle; and a
+    `pages_project_require_functions`, which confirms after each deploy that
+    the deployment wrangler reported for that upload is the production one
+    and carries its Functions bundle; and a
     `MockWrangler` for tests. Auth is never touched by jimemo — wrangler resolves its own
     `CLOUDFLARE_API_TOKEN` from the environment or its own credential
     store (setup and every deploy of the cloudflare backend need the

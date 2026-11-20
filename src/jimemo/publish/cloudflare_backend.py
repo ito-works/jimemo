@@ -242,22 +242,21 @@ def require_fail_closed(wrangler, project: str) -> None:
 
 
 def deploy_and_verify(wrangler, project: str, deploy_dir: Path) -> None:
-    """Deploy ``deploy_dir`` and confirm the upload became the production
-    deployment with its Functions bundle. Shared by publish()/gc()/
-    refresh_assets() and setup's own deploy.
+    """Deploy ``deploy_dir`` and confirm the deployment that upload
+    created is the production one and carries its Functions bundle.
+    Shared by publish()/gc()/refresh_assets() and setup's own deploy.
 
     Two different failures leave here. A PublishError that is not a
-    DeployUnverifiedError means nothing was uploaded (the read of the
-    current deployment id, or the deploy itself, failed). A
+    DeployUnverifiedError means the deploy itself failed. A
     DeployUnverifiedError means the upload ran and may be live, but the
     confirmation refused or could not be made (an API error or timeout
     after the upload counts): callers must not roll local state back as
     if the deploy had not happened.
     """
-    previous = wrangler.pages_project_production_deployment_id(project)
-    wrangler.pages_deploy(project, deploy_dir)
+    result = wrangler.pages_deploy(project, deploy_dir)
     try:
-        wrangler.pages_project_require_functions(project, previous)
+        wrangler.pages_project_require_functions(
+            project, getattr(result, "deployment_id", None))
     except DeployUnverifiedError:
         raise
     except PublishError as exc:
