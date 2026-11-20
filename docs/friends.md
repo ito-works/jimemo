@@ -85,8 +85,10 @@ This is the one step that needs Node, and it's entirely optional --
 `render` never touches the network regardless.
 
 If you don't already run something like notes.ito.com, `jimemo publish
-setup` provisions a free Cloudflare Pages project for you: it shells out
-to `npx wrangler`, so you need Node installed, plus a Cloudflare account
+setup` provisions a free Cloudflare Pages project for you: it runs the
+`wrangler` on your `PATH` (or the one `JIMEMO_WRANGLER` names) and never
+downloads one, so you need Node and a Wrangler you installed
+(`docs/publish-setup.md`, step 3), plus a Cloudflare account
 and an API token scoped to `Pages: Edit` + `Workers KV Storage: Edit`.
 Preview the whole plan first, without creating or touching anything:
 
@@ -142,7 +144,7 @@ directory, so it's safe to point at an export you didn't write yourself.
 | Step | Needs |
 | --- | --- |
 | Install, render, suggest, info, list, doctor, new-template, import-design | Python >= 3.13.6 only |
-| Publish (either backend) | The `command` backend needs whatever CLI you already point it at; the `cloudflare` backend needs Node (`npx wrangler`), curl >= 8.3, a Cloudflare account, and `CLOUDFLARE_API_TOKEN` exported in your shell |
+| Publish (either backend) | The `command` backend needs whatever CLI you already point it at; the `cloudflare` backend needs Node and an installed `wrangler` (on `PATH` or named by `JIMEMO_WRANGLER`), curl >= 8.3, a Cloudflare account, and `CLOUDFLARE_API_TOKEN` exported in your shell |
 
 Everything in the first row works with nothing installed beyond Python
 itself -- no account, no network access, no dependency to fetch.
