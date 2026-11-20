@@ -250,8 +250,9 @@ def deploy_and_verify(wrangler, project: str, deploy_dir: Path) -> None:
     DeployUnverifiedError means the deploy itself failed. A
     DeployUnverifiedError means the upload ran and may be live, but the
     confirmation refused or could not be made (an API error or timeout
-    after the upload counts), or wrangler exited nonzero after it had
-    created the deployment (see Wrangler.pages_deploy): callers must not
+    after the upload counts), or wrangler exited nonzero without showing
+    that it stopped before the deployment (see Wrangler.pages_deploy):
+    callers must not
     roll local state back as if the deploy had not happened.
     """
     result = wrangler.pages_deploy(project, deploy_dir)
@@ -346,7 +347,8 @@ class CloudflarePublisher(Publisher):
 
         One exception: a DeployUnverifiedError (see deploy_and_verify)
         means the upload ran and the page may be live -- the confirmation
-        failed, or wrangler failed after creating the deployment. The staged hash is
+        failed, or wrangler failed without showing that it stopped before
+        the deployment. The staged hash is
         KEPT, so `list` still shows it and a later deploy still carries
         it, and the error names the URL.
         """

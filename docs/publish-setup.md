@@ -174,10 +174,11 @@ automatically, mirroring notes.ito.com's model and ordering:
      and report `uses_functions: true` through the Pages API (also checked after
      every publish/gc deploy; a refusal here means the upload ran, so the
      error names the page URL and the page stays in the state directory;
-     so does a wrangler exit that is nonzero after it wrote its
-     deployment record or printed "Deployment complete", while a nonzero
-     exit with neither is read as a failure before the upload and the
-     staged page is removed),
+     so does any nonzero wrangler exit that wrangler did not show to have
+     stopped before the deployment; only an exit with wrangler's own
+     `command-failed` record and no "Success! Uploaded" line, such as an
+     auth or network failure, is read as a failure before the upload, and
+     only then is the staged page removed),
    - run a best-effort KV round-trip check,
    - write `~/.jimemo/config.toml` (no token in it -- see below).
 

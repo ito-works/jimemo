@@ -216,10 +216,12 @@ contract in detail.
     `pages_project_require_functions`, which confirms after each deploy that
     the deployment wrangler reported for that upload is the production one
     and carries its Functions bundle (`pages_deploy` raises
-    `DeployUnverifiedError`, which keeps the staged page, when wrangler
-    exits nonzero after writing its deployment record or printing
-    "Deployment complete", and a plain `PublishError`, which rolls it
-    back, when it exits nonzero with neither); and a
+    `DeployUnverifiedError`, which keeps the staged page, for any nonzero
+    exit except one with wrangler's own `command-failed` output record and
+    no "Success! Uploaded" line, the positive sign of a failure before the
+    upload, which raises a plain `PublishError` and rolls the page back;
+    it raises `WRANGLER_LOG` to `log` for the call so those lines print);
+    and a
     `MockWrangler` for tests. Auth is never touched by jimemo — wrangler resolves its own
     `CLOUDFLARE_API_TOKEN` from the environment or its own credential
     store (setup and every deploy of the cloudflare backend need the

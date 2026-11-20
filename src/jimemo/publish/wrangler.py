@@ -132,9 +132,34 @@ def _deployment_id_from_output(path: Path) -> Optional[str]:
     return found
 
 
+def _wrangler_reported_failure(path: Path) -> bool:
+    """True if wrangler's own error handler appended a ``command-failed``
+    entry to the WRANGLER_OUTPUT_FILE_PATH file. Its absence (a killed
+    process, or a record write that itself failed) proves nothing."""
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except (OSError, ValueError):
+        return False
+    for line in lines:
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(entry, dict) and entry.get("type") == "command-failed":
+            return True
+    return False
+
+
 #: The line wrangler prints once the Pages deployment exists, before it
 #: appends its ``pages-deploy`` record to WRANGLER_OUTPUT_FILE_PATH.
 DEPLOY_COMPLETE_MARKER = "Deployment complete"
+
+#: The line wrangler prints when the file upload finishes, before it
+#: creates the deployment. A failure reported without it came earlier.
+UPLOAD_COMPLETE_MARKER = "Success! Uploaded"
+
+#: WRANGLER_LOG levels at which wrangler still prints the two lines above.
+_LOUD_ENOUGH = ("log", "debug")
 
 
 def _failure_text(action: str, result: CompletedProcess) -> str:
@@ -248,29 +273,38 @@ class Wrangler:
         throwaway directory, outside the deployed tree.
 
         A nonzero exit is classified by what wrangler left behind
-        (jimemo#cf0d). A ``pages-deploy`` record, or wrangler's own
-        "Deployment complete" line, proves the deployment was created, so
-        the failure came after the upload (a failed write of that record,
-        for one) and raises DeployUnverifiedError: the page may be live.
-        With neither, it raises a plain PublishError, read as a failure
-        before the upload: auth, network, a missing project and a failed
-        file upload all exit before wrangler creates the deployment, and
-        each writes no record and prints no completion line.
+        (jimemo#cf0d). It is a plain PublishError, read as a failure
+        before the upload, only on positive evidence: wrangler's own
+        ``command-failed`` record, and no "Success! Uploaded" line, which
+        wrangler prints after the file upload and before it creates the
+        deployment. Auth, network, a missing project and a failed file
+        upload all end that way. Every other nonzero exit raises
+        DeployUnverifiedError, because the page may be live: a
+        ``pages-deploy`` record or a "Deployment complete" line proves the
+        deployment exists, and a run with no ``command-failed`` record (a
+        failed write of the record file, a killed process) or with the
+        upload line printed cannot rule it out. WRANGLER_LOG is raised to
+        "log" for this call when the inherited level would hide those
+        lines.
         """
         # Wrangler discovers functions/ relative to cwd, not the static
         # output argument. Resolve first so relative paths survive the cwd change.
         directory = Path(directory).resolve()
         with tempfile.TemporaryDirectory(prefix="jimemo-wrangler-out-") as out_dir:
             out_file = Path(out_dir) / "output.ndjson"
+            extra_env = {"WRANGLER_OUTPUT_FILE_PATH": str(out_file)}
+            if os.environ.get("WRANGLER_LOG", "").lower() not in _LOUD_ENOUGH:
+                extra_env["WRANGLER_LOG"] = "log"
             result = self._invoke(
                 ["pages", "deploy", str(directory), "--project-name", project,
                  "--branch", branch],
                 "pages deploy",
                 cwd=directory,
-                extra_env={"WRANGLER_OUTPUT_FILE_PATH": str(out_file)},
+                extra_env=extra_env,
                 check=False,
             )
             result.deployment_id = _deployment_id_from_output(out_file)
+            reported = _wrangler_reported_failure(out_file)
         if result.returncode != 0:
             failure = _failure_text("pages deploy", result)
             output = f"{result.stdout or ''}\n{result.stderr or ''}"
@@ -281,7 +315,12 @@ class Wrangler:
                     f"{failure}; wrangler had already created {created}, "
                     "so the upload ran"
                 )
-            raise PublishError(failure)
+            if reported and UPLOAD_COMPLETE_MARKER not in output:
+                raise PublishError(failure)
+            raise DeployUnverifiedError(
+                f"{failure}; wrangler did not show that it stopped before "
+                "creating the deployment, so the upload may have run"
+            )
         return result
 
     def pages_project_names(self) -> List[str]:
