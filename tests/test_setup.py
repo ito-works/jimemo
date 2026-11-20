@@ -1153,6 +1153,40 @@ def test_rerun_keeps_a_production_binding_to_another_namespace(tmp_path, monkeyp
     assert load_config(cfg_path).publish.cloudflare.kv_namespace_id == "ns-manual"
 
 
+def test_rerun_keeps_a_preview_only_binding(tmp_path, monkeypatch):
+    # Only preview is bound: that namespace holds the tombstones, so it
+    # is kept and production is bound to it. No fresh namespace.
+    wrangler = MockWrangler(projects=["friend-notes"])
+    wrangler.kv_bindings["preview"]["TOMBSTONES"] = "ns-preview"
+
+    wrangler, io, cfg_path = _run_real(tmp_path, monkeypatch, wrangler=wrangler)
+
+    names = [c[0] for c in wrangler.calls]
+    assert "kv_namespace_find" not in names
+    assert "kv_namespace_create" not in names
+    assert ("pages_project_bind_kv", "friend-notes", "TOMBSTONES", "ns-preview") in wrangler.calls
+    assert load_config(cfg_path).publish.cloudflare.kv_namespace_id == "ns-preview"
+
+
+def test_rerun_refuses_when_production_and_preview_bind_different_namespaces(tmp_path, monkeypatch):
+    # Each store may hold tombstones the other lacks; choosing one would
+    # bring purged pages back on the other environment.
+    wrangler = MockWrangler(projects=["friend-notes"])
+    wrangler.kv_bindings["production"]["TOMBSTONES"] = "ns-prod"
+    wrangler.kv_bindings["preview"]["TOMBSTONES"] = "ns-preview"
+
+    with pytest.raises(KVBindingError, match="will not pick one"):
+        _run_real(tmp_path, monkeypatch, wrangler=wrangler)
+
+    names = [c[0] for c in wrangler.calls]
+    assert "pages_project_bind_kv" not in names
+    assert "kv_namespace_create" not in names
+    assert "pages_deploy" not in names
+    assert wrangler.kv_bindings == {"production": {"TOMBSTONES": "ns-prod"},
+                                    "preview": {"TOMBSTONES": "ns-preview"}}
+    assert not (tmp_path / "config.toml").exists()
+
+
 def test_read_back_refusal_stops_before_deploy_and_config(tmp_path, monkeypatch):
     with pytest.raises(PublishError, match="reads back wrong"):
         _run_real(tmp_path, monkeypatch, wrangler=MisboundWrangler())
