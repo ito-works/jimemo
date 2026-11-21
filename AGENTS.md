@@ -163,8 +163,8 @@ repoman-submit -r jimemo -p jimemo -t "what the branch does"
 ```
 
 Repoman rebases the branch onto current `main`, runs `ci/gate.sh` (the
-registry row's command: `python3 -m pytest tests -q`, with pytest's exit 2
-reported as 1) in a throwaway checkout with a credential-free environment, and
+registry row's command, which runs `python3 -m pytest tests -q` and reports
+pytest's exit 2 as 1) in a throwaway checkout with a credential-free environment, and
 pushes only if the tests pass. If they fail, the kata issue comes back to you
 with a scrubbed failure comment; fix it, push again, and re-run
 `repoman-submit` — re-submission is the retry.
