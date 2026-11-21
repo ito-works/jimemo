@@ -1374,29 +1374,52 @@ def _is_token_name(node):
                 and "TOKEN" not in node.value.upper())
 
 
-def _is_environ(node):
-    return ((isinstance(node, ast.Attribute) and node.attr == "environ"
-             and isinstance(node.value, ast.Name) and node.value.id == "os")
-            or (isinstance(node, ast.Name) and node.id == "environ"))
+_ENVIRON_ATTRS = {"environ", "environb"}
+_GETENV_ATTRS = {"getenv", "getenvb"}
 
 
-def _is_getenv(func):
-    return ((isinstance(func, ast.Attribute) and func.attr == "getenv")
-            or (isinstance(func, ast.Name) and func.id == "getenv"))
+def _os_aliases(tree):
+    """Local names an ``import`` binds to ``os.environ``/``os.getenv``.
+
+    ``import os as anything`` needs no tracking: any ``.environ`` attribute
+    is checked whatever its base is named. ``from os import environ as X``
+    and ``from os import getenv as Y`` bind bare names, so collect them;
+    ``from os import *`` binds them invisibly and is itself a violation.
+    """
+    environ, getenv, star = set(_ENVIRON_ATTRS), set(_GETENV_ATTRS), []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module in ("os", "posix", "nt"):
+            for alias in node.names:
+                if alias.name == "*":
+                    star.append(node.lineno)
+                elif alias.name in _ENVIRON_ATTRS:
+                    environ.add(alias.asname or alias.name)
+                elif alias.name in _GETENV_ATTRS:
+                    getenv.add(alias.asname or alias.name)
+    return environ, getenv, star
 
 
 def environ_violations(source):
     """Line numbers where ``source`` reads a token value or copies or
     enumerates the environment."""
     tree = ast.parse(source)
+    environ_names, getenv_names, bad = _os_aliases(tree)
+
+    def is_environ(node):
+        return ((isinstance(node, ast.Attribute) and node.attr in _ENVIRON_ATTRS)
+                or (isinstance(node, ast.Name) and node.id in environ_names))
+
+    def is_getenv(func):
+        return ((isinstance(func, ast.Attribute) and func.attr in _GETENV_ATTRS)
+                or (isinstance(func, ast.Name) and func.id in getenv_names))
+
     parents = {child: node for node in ast.walk(tree)
                for child in ast.iter_child_nodes(node)}
-    bad = []
     for node in ast.walk(tree):
-        if isinstance(node, ast.Call) and _is_getenv(node.func):
+        if isinstance(node, ast.Call) and is_getenv(node.func):
             if not node.args or _is_token_name(node.args[0]):
                 bad.append(node.lineno)
-        if not _is_environ(node):
+        if not is_environ(node):
             continue
         parent = parents.get(node)
         if (isinstance(parent, ast.Compare) and node in parent.comparators
@@ -1428,6 +1451,12 @@ def environ_violations(source):
     "t = os.getenv('CLOUDFLARE_API_TOKEN')",
     "from os import environ\nt = environ.get('CF_API_TOKEN')",
     "from os import getenv\nt = getenv('CLOUDFLARE_API_TOKEN', '')",
+    # import aliases (fresheyes round 1): the spelling must not matter
+    "import os as operating_system\nenv = dict(operating_system.environ, **extra)",
+    "from os import environ as process_env\nt = process_env['CLOUDFLARE_API_TOKEN']",
+    "from os import getenv as read_env\nt = read_env('CLOUDFLARE_API_TOKEN')",
+    "from os import environb as eb\nenv = dict(eb)",
+    "from os import *\nok = 1",
 ])
 def test_environ_guard_rejects_reads_copies_and_enumeration(source):
     assert environ_violations(source)
