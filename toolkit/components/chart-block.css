@@ -1,9 +1,10 @@
 /* chart-block — a labeled wrapper around one Chart.js canvas. The
  * canvas is Chart.js's own drawing surface (sized by its `responsive`
- * default against this block's width) and cannot read these custom
- * properties, so only the title and spacing are styled here; the
- * rendered colors come from charts.py's DEFAULT_PALETTE (see
- * tokens.css's chart-palette note for why the two must stay in sync). */
+ * default against this block's width) and CSS cannot style what it
+ * paints, so only the title and spacing are styled here. The canvas
+ * colors come from the chart's init script, which reads --jm-chart-N,
+ * --jm-muted and --jm-border at view time and repaints on a theme
+ * change (see tokens.css's chart-palette note). */
 
 .jm-chart-block {
   margin-block: var(--jm-space-6);

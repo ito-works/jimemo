@@ -42,6 +42,10 @@ FIXTURES = Path(__file__).resolve().parent / "fixtures"
 # chart_init_js("sales", '{"type":"bar"}') exactly as jimemo 0.0.3
 # (origin/main at 404cf8c, the jimemo#7n1f runtime) emitted it.
 FROZEN_003 = (FIXTURES / "chart-init-0.0.3-sales.js").read_text(encoding="utf-8")
+# The same call as jimemo 0.0.4 (main at 92f02fa: the jimemo#s3e6
+# fallback toggle around the 7n1f runtime) emitted it, before the
+# runtime read chart chrome tokens (jimemo#e2sb).
+FROZEN_004 = (FIXTURES / "chart-init-0.0.4-sales.js").read_text(encoding="utf-8")
 NODE = shutil.which("node")
 
 
@@ -149,6 +153,7 @@ def test_frozen_003_body_differs_from_the_new_body():
 
 @pytest.mark.parametrize("body", [
     FROZEN_003,
+    FROZEN_004,
     chart_init_js("sales", '{"type":"bar"}'),
     'new Chart(document.getElementById("sales"), {"type":"bar"});',
 ])
@@ -160,6 +165,25 @@ def test_frozen_003_body_passes_standalone_lint():
     page = f'<html><body><canvas id="sales"></canvas><script>{FROZEN_003}</script></body></html>'
     errors, _ = lint_html(page, {"charts": ["sales"]})
     assert errors == []
+
+
+def test_current_body_differs_from_both_frozen_generations():
+    current = chart_init_js("sales", '{"type":"bar"}')
+    assert current not in (FROZEN_003, FROZEN_004)
+
+
+@pytest.mark.parametrize("frozen", [FROZEN_003, FROZEN_004])
+def test_frozen_body_passes_standalone_lint(frozen):
+    page = f'<html><body><canvas id="sales"></canvas><script>{frozen}</script></body></html>'
+    errors, _ = lint_html(page, {"charts": ["sales"]})
+    assert errors == []
+
+
+def test_frozen_004_body_with_an_edited_runtime_is_rejected():
+    edited = FROZEN_004.replace("beforeprint", "load", 1)
+    page = f'<html><body><canvas id="sales"></canvas><script>{edited}</script></body></html>'
+    errors, _ = lint_html(page, {"charts": ["sales"]})
+    assert any("unexpected inline" in e for e in errors)
 
 
 def test_frozen_003_body_with_an_edited_runtime_is_rejected():
@@ -204,6 +228,7 @@ process.stdin.on("end", () => {
   global.addEventListener = () => {};
   global.Chart = noChart ? undefined
     : function () { if (chartThrows) throw new Error("boom"); this.update = () => {}; };
+  if (global.Chart) global.Chart.defaults = {color: "#666", borderColor: "rgba(0,0,0,0.1)"};
   let threw = false;
   try { eval(body); } catch (e) { threw = true; }
   console.log(JSON.stringify({threw, hidden: canvas.hidden,
