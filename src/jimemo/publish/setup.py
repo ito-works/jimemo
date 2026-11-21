@@ -630,7 +630,7 @@ def run_setup(dry_run: bool, wrangler, config_path: Path, io: SetupIO,
 
     if dry_run:
         io.print("[dry-run] would check: CLOUDFLARE_API_TOKEN is set")
-    elif not os.environ.get("CLOUDFLARE_API_TOKEN"):
+    elif "CLOUDFLARE_API_TOKEN" not in os.environ:
         raise PublishError(TOKEN_MISSING_MESSAGE)
 
     if dry_run:

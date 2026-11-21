@@ -4,10 +4,13 @@
 Auth: wrangler resolves its own Cloudflare API token -- from the
 ``CLOUDFLARE_API_TOKEN`` environment variable, or its own ``wrangler
 login`` credential store. jimemo never reads, stores, forwards, or logs
-a token itself: every method here just execs ``wrangler <subcommand> ...``
-as a plain subprocess and lets wrangler's own process resolve auth
-from its environment. If jimemo doesn't touch the token, it can't leak
-the token.
+a token itself, and never copies or enumerates the environment: every
+method here just execs ``wrangler <subcommand> ...`` as a plain
+subprocess that inherits the environment unchanged (``env=None``) and
+lets wrangler's own process resolve auth from it. Non-secret names
+scoped onto one call, such as CLOUDFLARE_ACCOUNT_ID, travel as a
+``/usr/bin/env NAME=value`` prefix in argv. If jimemo doesn't touch the
+token, it can't leak the token.
 
 Project creation uses the stable Pages REST API: recent Wrangler releases
 redirect ``pages project create`` to Workers. Wrangler also cannot read or
@@ -90,9 +93,9 @@ def _run(argv: List[str], env: Optional[Dict[str, str]] = None,
          *, cwd: Optional[Path] = None) -> CompletedProcess:
     """Default runner: a real subprocess, list-form argv only, never
     shell=True. ``env=None`` (the default) means inherit the parent
-    process's environment unchanged -- Wrangler only passes a non-None
-    env when an account_id is configured, to layer
-    CLOUDFLARE_ACCOUNT_ID on top of that inherited environment (see
+    process's environment unchanged. Wrangler always passes None: names
+    it scopes onto a call (CLOUDFLARE_ACCOUNT_ID and the like) ride a
+    ``/usr/bin/env NAME=value`` prefix in argv instead (see
     Wrangler._invoke)."""
     return subprocess.run(argv, capture_output=True, text=True, env=env, cwd=cwd)
 
@@ -162,6 +165,33 @@ UPLOAD_COMPLETE_MARKER = "Success! Uploaded"
 _LOUD_ENOUGH = ("log", "debug")
 
 
+#: The program that scopes extra names onto a wrangler call; see _invoke.
+_ENV = "/usr/bin/env"
+
+#: A plain environment name: env reads only NAME=value words, and a word
+#: starting with "-" would be one of its options.
+_ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+
+def _env_could_not_run(result: CompletedProcess, executable: str) -> bool:
+    """True when /usr/bin/env, not wrangler, failed: it could not find
+    (127) or execute (126) ``executable``.
+
+    How the two are told apart: env then prints exactly one line, to
+    stderr, that starts with its own name and names the executable
+    (``env: wrangler: No such file or directory`` on macOS,
+    ``/usr/bin/env: 'wrangler': No such file or directory`` on GNU), and
+    nothing on stdout. Wrangler exiting 126 or 127 itself prints its own
+    error text, which does not start with ``env:``, so it keeps the
+    ordinary failure handling with its output included."""
+    if result.returncode not in (126, 127) or (result.stdout or "").strip():
+        return False
+    lines = (result.stderr or "").strip().splitlines()
+    return (len(lines) == 1
+            and lines[0].startswith(("env:", _ENV + ":"))
+            and executable in lines[0])
+
+
 def _failure_text(action: str, result: CompletedProcess) -> str:
     stderr = (result.stderr or "").strip()
     return f"wrangler {action} failed (exit {result.returncode}): {stderr}"
@@ -204,11 +234,12 @@ class Wrangler:
     which is what makes it work when a friend's API token is scoped without
     ``User:Memberships:Read`` and wrangler's own account-discovery call
     would otherwise fail or guess wrong. When ``account_id`` is set,
-    every subprocess call this class makes runs with
-    ``CLOUDFLARE_ACCOUNT_ID`` layered on top of the inherited environment
-    (see ``_invoke``). It is never used to touch the Cloudflare API
-    token itself, which stays wherever it already was -- inherited from
-    the parent environment, untouched and unread by this module.
+    every wrangler call this class makes runs as
+    ``/usr/bin/env CLOUDFLARE_ACCOUNT_ID=<id> wrangler ...``, so the
+    child inherits the parent environment unchanged plus that one name
+    (see ``_invoke``). jimemo never builds a copy of the environment, so
+    the Cloudflare API token stays wherever it already was, inherited by
+    the child and never read, copied or enumerated by this module.
     """
 
     def __init__(
@@ -257,15 +288,32 @@ class Wrangler:
         extra = dict(extra_env or {})
         if self.account_id:
             extra["CLOUDFLARE_ACCOUNT_ID"] = self.account_id
-        # None means "inherit unchanged"; otherwise the inherited
-        # environment is copied whole with these non-secret names layered
-        # on top. No value in it is read here.
-        env = dict(os.environ, **extra) if extra else None
+        command = [self.executable] + argv
+        if extra:
+            # The scoped names ride /usr/bin/env's argv, never a mapping
+            # built from os.environ: the child inherits this process's
+            # environment unchanged plus these non-secret names, and no
+            # inherited value, the token included, ever enters Python.
+            for name, value in extra.items():
+                if not _ENV_NAME.fullmatch(name) or "\0" in value:
+                    raise PublishError(
+                        f"refusing to run wrangler {action}: {name!r} is not "
+                        "a plain environment name, or its value holds a NUL")
+            if "=" in self.executable:
+                # env reads any NAME=value word as an assignment, so it
+                # would take this path for one and never run it.
+                raise PublishError(
+                    f"refusing to run wrangler {action}: the Wrangler path "
+                    f"{self.executable!r} contains '=', which /usr/bin/env "
+                    "reads as an assignment; use a path without '='")
+            command = ([_ENV] + [f"{name}={value}" for name, value in extra.items()]
+                       + command)
         try:
-            command = [self.executable] + argv
-            result = (self._run(command, env, cwd=cwd) if cwd is not None
-                      else self._run(command, env))
+            result = (self._run(command, None, cwd=cwd) if cwd is not None
+                      else self._run(command, None))
         except OSError:
+            raise PublishError(NO_WRANGLER_MESSAGE)
+        if command[0] == _ENV and _env_could_not_run(result, self.executable):
             raise PublishError(NO_WRANGLER_MESSAGE)
         if check and result.returncode != 0:
             raise PublishError(_failure_text(action, result))
