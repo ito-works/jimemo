@@ -202,6 +202,9 @@ print-force stylesheet), so pinning is about how the page reads in a
 browser, not about the PDF. Any other `--theme NAME` applies a named
 theme override (see "Import a design" below).
 
+Pages are marked `<html lang="en">`; `--lang ja` (any BCP 47 tag, such
+as `zh-Hant-TW`) sets the page language instead.
+
 ### Research documents
 
 The `research-bible` template renders the output of a retrieval-first

@@ -573,6 +573,7 @@ def render_page(
     base_dir: Optional[Path] = None,
     figures: Optional[Dict[str, str]] = None,
     svg_sources: Optional[List[Path]] = None,
+    lang: Optional[str] = None,
 ) -> str:
     """Full HTML string (assembled + inlined) for `content` rendered
     through the template in `template_dir`. `base_dir` is the directory
@@ -585,6 +586,9 @@ def render_page(
     what they were before the parameter existed. Whatever the sanitizer
     drops from a figure is reported as ``warning: figure NAME: …`` lines
     on stderr, with the other warnings.
+
+    `lang` sets the page's ``<html lang>`` attribute; None leaves the
+    toolkit's "en" default, so such pages are unchanged.
 
     A markdown image of a local ``.svg`` file is replaced by that SVG,
     sanitized, inline (_splice_svg_images; docs/diagrams.md). When
@@ -624,6 +628,8 @@ def render_page(
     context["manifest"] = manifest
     context["styles"] = styles
     context["theme"] = theme
+    if lang is not None:
+        context["lang"] = lang
 
     # Chartless manifests inject NOTHING here — their rendered output
     # is byte-identical to the chartless form (the goldens pin this). The

@@ -453,6 +453,7 @@ def _do_render(
             base_dir=content_path.resolve().parent,
             figures=figures,
             svg_sources=svg_sources,
+            lang=args.lang,
         )
     except (ManifestError, ContentError) as e:
         print(str(e), file=sys.stderr)
@@ -1112,6 +1113,21 @@ def cmd_new_template(args) -> int:
     return 0
 
 
+# A plausible BCP 47 tag: 2-35 characters of letter/digit subtags joined
+# by single hyphens. Not a full validator -- just enough that the value is
+# safe and sensible in an HTML attribute (jimemo#y1rk).
+_LANG_TAG_RE = re.compile(r"[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*")
+
+
+def _lang_tag(value: str) -> str:
+    if not (2 <= len(value) <= 35 and _LANG_TAG_RE.fullmatch(value)):
+        raise argparse.ArgumentTypeError(
+            f"{value!r} is not a language tag (letters, digits and single "
+            "hyphens, 2 to 35 characters, e.g. ja or en-US)"
+        )
+    return value
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(
         prog="jimemo",
@@ -1131,6 +1147,11 @@ def main(argv=None) -> int:
         "--theme",
         help="apply a theme override by name (repo toolkit/themes/, or "
         "~/.jimemo/themes/ -- see 'jimemo import-design')",
+    )
+    render_p.add_argument(
+        "--lang", type=_lang_tag, metavar="TAG",
+        help='page language for <html lang>, a BCP 47 tag such as "ja" or '
+        '"zh-Hant-TW" (default: "en")',
     )
     render_p.add_argument(
         "--figure", action="append", metavar="NAME=FILE",

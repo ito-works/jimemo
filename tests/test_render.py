@@ -655,3 +655,64 @@ def test_render_page_unknown_theme_raises_manifest_error(tmp_path, monkeypatch):
 
     with pytest.raises(ManifestError, match="unknown theme"):
         render_page(template_dir, content, theme="no-such-theme")
+
+
+# --- page language (jimemo#y1rk) ---
+
+def _html_tag(html: str) -> str:
+    return re.search(r"<html\b[^>]*>", html).group(0)
+
+
+def test_render_page_lang_sets_html_lang_attribute(tmp_path):
+    template_dir = make_template_dir(tmp_path, "test-tpl", BASIC_TEMPLATE)
+    content = {"title": "Hello", "body": Markup("<p>World</p>")}
+    html = render_page(template_dir, content, lang="ja")
+    assert _html_tag(html).startswith('<html lang="ja"')
+
+
+def test_render_page_lang_omitted_keeps_en_default(tmp_path):
+    template_dir = make_template_dir(tmp_path, "test-tpl", BASIC_TEMPLATE)
+    content = {"title": "Hello", "body": Markup("<p>World</p>")}
+    html = render_page(template_dir, content)
+    assert _html_tag(html).startswith('<html lang="en"')
+
+
+def _cli_render(tmp_path, monkeypatch, *extra):
+    make_template_dir(tmp_path / "templates", "test-tpl", BASIC_TEMPLATE)
+    monkeypatch.setattr(cli, "default_search_dirs", lambda: [tmp_path / "templates"])
+    content_file = tmp_path / "content.md"
+    content_file.write_text("---\ntitle: From CLI\n---\nBody text.\n")
+    out_path = tmp_path / "out.html"
+    rc = cli.main(["render", "test-tpl", str(content_file), "-o", str(out_path), *extra])
+    return rc, out_path
+
+
+def test_cli_render_lang_option(tmp_path, monkeypatch):
+    rc, out_path = _cli_render(tmp_path, monkeypatch, "--lang", "ja")
+    assert rc == 0
+    assert _html_tag(out_path.read_text(encoding="utf-8")).startswith('<html lang="ja"')
+
+
+def test_cli_render_without_lang_is_en(tmp_path, monkeypatch):
+    rc, out_path = _cli_render(tmp_path, monkeypatch)
+    assert rc == 0
+    assert _html_tag(out_path.read_text(encoding="utf-8")).startswith('<html lang="en"')
+
+
+def test_cli_render_lang_accepts_region_subtag(tmp_path, monkeypatch):
+    rc, out_path = _cli_render(tmp_path, monkeypatch, "--lang", "zh-Hant-TW")
+    assert rc == 0
+    assert 'lang="zh-Hant-TW"' in _html_tag(out_path.read_text(encoding="utf-8"))
+
+
+@pytest.mark.parametrize(
+    "bad", ['ja" onload="x', "j", "a" * 36, "ja_JP", "", "-ja", "ja--jp", "ja-"]
+)
+def test_cli_render_refuses_implausible_lang(tmp_path, monkeypatch, capsys, bad):
+    with pytest.raises(SystemExit) as exc:
+        _cli_render(tmp_path, monkeypatch, "--lang", bad)
+    assert exc.value.code == 2
+    assert not (tmp_path / "out.html").exists()
+    err = capsys.readouterr().err
+    assert "--lang" in err
+    assert "Traceback" not in err
