@@ -39,7 +39,10 @@ computed literals rather than source-token aliases:
     ~2.3:1 on white) fails WCAG AA. Each is the brand color darkened, hue
     kept, just far enough to reach 4.5:1 against the mapped --jm-bg
     (jimemo's light --jm-bg when unmapped); one that already passes is
-    copied unchanged, and one that cannot be measured is not mapped.
+    copied unchanged. A translucent one is composited over the bg first.
+    When there is no measurable brand color, jimemo's default is emitted,
+    checked against the same bg; a bg that cannot be measured is not
+    mapped, so the check always has a bg to measure.
     The cost, accepted by ruling on jimemo#jw31: editing the raw brand
     token after import no longer moves these two roles; re-run the import.
 
@@ -49,6 +52,7 @@ not map (see _LIGHT_DEFAULTS), since an imported theme has no dark variant.
 """
 from __future__ import annotations
 
+import math
 import re
 from typing import Dict, List, Optional, Tuple
 
@@ -392,31 +396,35 @@ def _luminance(value: str, tokens_by_name: Dict[str, Token]) -> Optional[float]:
 
 
 _NUM = r"([+-]?(?:\d+\.?\d*|\.\d+))"
-# rgb()/hsl() in comma or space syntax, with an optional alpha that must be
-# fully opaque to measure: a translucent color's contrast depends on what
-# is painted under it.
+# rgb()/hsl() in comma or space syntax, with an optional alpha.
 _RGB_FN_RE = re.compile(
     r"^rgba?\(\s*{n}(%?)\s*[,\s]\s*{n}(%?)\s*[,\s]\s*{n}(%?)\s*"
     r"(?:[,/]\s*{n}(%?)\s*)?\)$".format(n=_NUM),
     re.IGNORECASE,
 )
 _HSL_FN_RE = re.compile(
-    r"^hsla?\(\s*{n}(deg)?\s*[,\s]\s*{n}%\s*[,\s]\s*{n}%\s*"
+    r"^hsla?\(\s*{n}(deg|turn|rad|grad)?\s*[,\s]\s*{n}%\s*[,\s]\s*{n}%\s*"
     r"(?:[,/]\s*{n}(%?)\s*)?\)$".format(n=_NUM),
     re.IGNORECASE,
 )
 
 
-def _opaque(alpha: Optional[str], pct: Optional[str]) -> bool:
+def _alpha(alpha: Optional[str], pct: Optional[str]) -> float:
     if alpha is None:
-        return True
-    return float(alpha) >= (100 if pct else 1)
+        return 1.0
+    return min(1.0, max(0.0, float(alpha) / (100 if pct else 1)))
 
 
-def _rgb(value: str, tokens_by_name: Dict[str, Token]) -> Optional[Tuple[int, int, int]]:
-    """(r, g, b) in 0..255 for a (possibly var()-aliased) `#rgb`/`#rrggbb`,
-    or opaque `rgb()`/`hsl()`, color; None for anything else, a translucent
-    color included -- the parse `_luminance` and `_text_safe` share."""
+# Degrees per unit of an hsl() hue; a bare number is degrees.
+_HUE_UNIT_DEG = {None: 1.0, "deg": 1.0, "turn": 360.0, "grad": 0.9, "rad": 180 / math.pi}
+
+
+def _rgba(
+    value: str, tokens_by_name: Dict[str, Token]
+) -> Optional[Tuple[Tuple[int, int, int], float]]:
+    """((r, g, b) in 0..255, alpha in 0..1) for a (possibly var()-aliased)
+    `#rgb`/`#rrggbb`, `rgb()`/`rgba()` or `hsl()`/`hsla()` color; None for
+    any other form (a named color, oklch(), color-mix() ...)."""
     resolved = _resolve_color(value, tokens_by_name)
     if resolved is None:
         return None
@@ -425,29 +433,41 @@ def _rgb(value: str, tokens_by_name: Dict[str, Token]) -> Optional[Tuple[int, in
         h = m.group(1)
         if len(h) == 3:
             h = "".join(c * 2 for c in h)
-        return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+        return (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)), 1.0
     m = _RGB_FN_RE.match(resolved)
     if m:
-        if not _opaque(m.group(7), m.group(8)):
-            return None
         chans = []
         for i in (1, 3, 5):
             v = float(m.group(i))
             v = v * 255 / 100 if m.group(i + 1) else v
             chans.append(round(min(255.0, max(0.0, v))))
-        return chans[0], chans[1], chans[2]
+        return (chans[0], chans[1], chans[2]), _alpha(m.group(7), m.group(8))
     m = _HSL_FN_RE.match(resolved)
     if m:
-        if not _opaque(m.group(5), m.group(6)):
-            return None
         import colorsys
 
-        h = (float(m.group(1)) % 360) / 360
+        deg = float(m.group(1)) * _HUE_UNIT_DEG[m.group(2) and m.group(2).lower()]
+        h = (deg % 360) / 360
         sat = min(100.0, max(0.0, float(m.group(3)))) / 100
         light = min(100.0, max(0.0, float(m.group(4)))) / 100
         r, g, b = colorsys.hls_to_rgb(h, light, sat)
-        return round(r * 255), round(g * 255), round(b * 255)
+        return (round(r * 255), round(g * 255), round(b * 255)), _alpha(m.group(5), m.group(6))
     return None
+
+
+def _rgb(value: str, tokens_by_name: Dict[str, Token]) -> Optional[Tuple[int, int, int]]:
+    """(r, g, b) for an opaque color `_rgba` parses; None for anything else,
+    a translucent color included (its look depends on what is under it)."""
+    parsed = _rgba(value, tokens_by_name)
+    if parsed is None or parsed[1] < 1.0:
+        return None
+    return parsed[0]
+
+
+def _over(rgba: Tuple[Tuple[int, int, int], float], under: Tuple[int, int, int]) -> Tuple[int, int, int]:
+    """`rgba` alpha-composited over the opaque `under`: the color that renders."""
+    rgb, a = rgba
+    return tuple(round(c * a + u * (1 - a)) for c, u in zip(rgb, under))
 
 
 def _relative_luminance(rgb: Tuple[int, int, int]) -> float:
@@ -588,12 +608,15 @@ def _pick_greys(
 
 def _color_mappings(
     export: DesignExport,
-) -> "Tuple[Dict[str, Tuple[Token, Optional[str]]], Dict[str, str]]":
-    """(mappings, skipped). mappings: jm role -> (source token, literal
-    override or None to emit var(--source)); only roles with a confident
-    source token are present, and callers must leave every other role at
-    jimemo's default. skipped: role -> review note, for a role that had a
-    source token but was left at the default on purpose."""
+) -> "Tuple[Dict[str, Tuple[Token, Optional[str]]], Dict[str, str], Dict[str, str]]":
+    """(mappings, skipped, defaults). mappings: jm role -> (source token,
+    literal override or None to emit var(--source)); only roles with a
+    confident source token are present, and callers must leave every other
+    role at jimemo's default. skipped: role -> review note, for a role that
+    had a source token but was left at the default on purpose. defaults:
+    role -> the value to emit in place of jimemo's light default, for an
+    unmapped --jm-positive/--jm-negative whose default was checked against
+    the bg that renders."""
     tokens_by_name = {t.name: t for t in export.tokens}
     colors = _color_tokens(export)
     result: Dict[str, Tuple[Token, Optional[str]]] = {}
@@ -603,9 +626,25 @@ def _color_mappings(
     if text:
         result["--jm-text"] = (text, None)
 
+    # The bg every badge color is checked against. A translucent bg is
+    # composited over the white canvas the theme's `color-scheme: light`
+    # gives the page. A bg the importer cannot measure at all is not mapped:
+    # the page then renders on the light default, which the checks below
+    # can measure (jimemo#jw31).
     bg = _pick_by_keywords(colors, _BG_KEYWORDS)
+    bg_rgb = _rgb(_LIGHT_DEFAULTS["--jm-bg"], {})
     if bg:
-        result["--jm-bg"] = (bg, None)
+        parsed_bg = _rgba(bg.value, tokens_by_name)
+        if parsed_bg is None:
+            skipped["--jm-bg"] = (
+                "--jm-bg matched {} but was left at jimemo's default: it is not "
+                "a hex/rgb()/hsl() color, so the text contrast of "
+                "--jm-positive/--jm-negative on it cannot be checked; set "
+                "--jm-bg manually and check those two against it.".format(bg.name)
+            )
+        else:
+            result["--jm-bg"] = (bg, None)
+            bg_rgb = _over(parsed_bg, (255, 255, 255))
 
     surface = _pick_by_keywords(colors, _SURFACE_KEYWORDS)
     if surface:
@@ -624,36 +663,33 @@ def _color_mappings(
         contrast = "#000000" if (lum is not None and lum > 0.5) else "#ffffff"
         result["--jm-accent-contrast"] = (accent, contrast)
 
-    # positive/negative are status-badge TEXT, so each becomes a computed
-    # literal that reaches AA contrast on the bg that renders (jimemo#jw31):
-    # the mapped --jm-bg, or the light default the theme pins when bg is
-    # unmapped. A color that cannot be measured (translucent, or a form
-    # _rgb does not parse), or an unmeasurable bg, leaves the role at
-    # jimemo's AA-safe default instead of aliasing an unchecked color.
-    if bg:
-        bg_rgb = _rgb(bg.value, tokens_by_name)
-    else:
-        bg_rgb = _rgb(_LIGHT_DEFAULTS["--jm-bg"], {})
+    # positive/negative are status-badge TEXT, so every value emitted for
+    # them is a literal that reaches AA contrast on the bg that renders
+    # (jimemo#jw31). A translucent brand color is composited over that bg
+    # first. With no brand color to start from (none matched, or one in a
+    # form _rgba does not parse), jimemo's default is the starting point,
+    # checked the same way: it passes unchanged on a light bg and is
+    # adjusted on a dark one. `defaults` holds those, by role.
+    defaults: Dict[str, str] = {}
     for role, keywords in (
         ("--jm-positive", _POSITIVE_KEYWORDS),
         ("--jm-negative", _NEGATIVE_KEYWORDS),
     ):
         token = _pick_hue(colors, keywords)
-        if not token:
+        parsed = _rgba(token.value, tokens_by_name) if token else None
+        if parsed is not None:
+            result[role] = (token, _text_safe(_over(parsed, bg_rgb), bg_rgb))
             continue
-        rgb = _rgb(token.value, tokens_by_name)
-        if rgb is None or bg_rgb is None:
-            unmeasured = token.name if rgb is None else bg.name
+        if token:
             skipped[role] = (
-                "{} matched {} but was left at jimemo's default: {} is not an "
-                "opaque hex/rgb()/hsl() color, so its text contrast cannot be "
-                "checked; set it manually to a color with at least 4.5:1 "
-                "contrast on --jm-bg.".format(role, token.name, unmeasured)
+                "{} matched {} but was left at jimemo's default (adjusted to "
+                "4.5:1 contrast on --jm-bg if needed): it is not a "
+                "hex/rgb()/hsl() color, so it cannot be measured; set it "
+                "manually if the brand color should be used.".format(role, token.name)
             )
-            continue
-        result[role] = (token, _text_safe(rgb, bg_rgb))
+        defaults[role] = _text_safe(_rgb(_LIGHT_DEFAULTS[role], {}), bg_rgb)
 
-    return result, skipped
+    return result, skipped, defaults
 
 
 # ---------------------------------------------------------------------------
@@ -841,7 +877,7 @@ def build_theme(export: DesignExport, name: str) -> str:
             "left at jimemo defaults."
         )
 
-    color_map, skipped = _color_mappings(export)
+    color_map, skipped, checked_defaults = _color_mappings(export)
     for role, (token, literal) in color_map.items():
         role_values[role] = literal if literal is not None else "var({})".format(token.name)
         mapped_lines.append((role, "computed from " + token.name if literal is not None else token.name))
@@ -876,7 +912,9 @@ def build_theme(export: DesignExport, name: str) -> str:
     body_lines.append("")
     body_lines.append("  /* -- light-only: pin what tokens.css's dark block would leave -- */")
     body_lines.extend(
-        "  {}: {};".format(n, v) for n, v in _LIGHT_DEFAULTS.items() if n not in role_values
+        "  {}: {};".format(n, checked_defaults.get(n, v))
+        for n, v in _LIGHT_DEFAULTS.items()
+        if n not in role_values
     )
 
     css = header + ":root {\n" + "\n".join(body_lines) + "\n}\n"
