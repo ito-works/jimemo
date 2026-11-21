@@ -29,10 +29,22 @@ brand systems built around one family, not jimemo's editorial split.
 Mapped role values are emitted as `var(--<ns>-name)` referencing the
 matching *source* token (not its resolved color), so editing the raw
 token after import still moves the mapped role -- the two blocks stay
-live, not a one-time copy. `--jm-accent-contrast` is the one exception:
-it is a computed literal (#ffffff/#000000), not a source-token alias,
-because no export in the wild publishes an explicit "text-on-accent"
-token to alias.
+live, not a one-time copy. Three roles are exceptions, emitted as
+computed literals rather than source-token aliases:
+
+  - `--jm-accent-contrast` (#ffffff/#000000), because no export in the
+    wild publishes an explicit "text-on-accent" token to alias.
+  - `--jm-positive` and `--jm-negative`, because they render as small
+    status-badge text and a pale brand green or red (sage #8DB1A7 is
+    ~2.3:1 on white) fails WCAG AA. Each is the brand color darkened, hue
+    kept, just far enough to reach 4.5:1 against the mapped --jm-bg
+    (white when unmapped); one that already passes is copied unchanged.
+    The cost, accepted by ruling on jimemo#jw31: editing the raw brand
+    token after import no longer moves these two roles; re-run the import.
+
+The :root block also pins `color-scheme: light` and jimemo's light-mode
+shadows and chart palette (see _LIGHT_ONLY_DECLS), since an imported theme
+has no dark variant.
 """
 from __future__ import annotations
 
@@ -371,6 +383,16 @@ def _luminance(value: str, tokens_by_name: Dict[str, Token]) -> Optional[float]:
     color, or None if it doesn't resolve to a plain `#rgb`/`#rrggbb`
     value (rgba/hsl and non-color values are left as None rather than
     guessed at -- every fixture and real export seen so far uses hex)."""
+    rgb = _rgb(value, tokens_by_name)
+    if rgb is None:
+        return None
+    r, g, b = rgb
+    return (0.299 * r + 0.587 * g + 0.114 * b) / 255
+
+
+def _rgb(value: str, tokens_by_name: Dict[str, Token]) -> Optional[Tuple[int, int, int]]:
+    """(r, g, b) in 0..255 for a (possibly var()-aliased) `#rgb`/`#rrggbb`
+    color, or None -- the parse `_luminance` and `_text_safe` share."""
     resolved = _resolve_color(value, tokens_by_name)
     if resolved is None:
         return None
@@ -380,8 +402,49 @@ def _luminance(value: str, tokens_by_name: Dict[str, Token]) -> Optional[float]:
     h = m.group(1)
     if len(h) == 3:
         h = "".join(c * 2 for c in h)
-    r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
-    return (0.299 * r + 0.587 * g + 0.114 * b) / 255
+    return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+
+
+def _relative_luminance(rgb: Tuple[int, int, int]) -> float:
+    """WCAG 2 relative luminance. `_luminance` above is a cheap perceptual
+    weight good enough to rank greys; a contrast RATIO needs this one."""
+    def lin(c: int) -> float:
+        x = c / 255
+        return x / 12.92 if x <= 0.04045 else ((x + 0.055) / 1.055) ** 2.4
+
+    r, g, b = (lin(c) for c in rgb)
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b
+
+
+def _contrast_ratio(a: Tuple[int, int, int], b: Tuple[int, int, int]) -> float:
+    la, lb = sorted((_relative_luminance(a), _relative_luminance(b)), reverse=True)
+    return (la + 0.05) / (lb + 0.05)
+
+
+# WCAG AA for normal-size text: --jm-positive/--jm-negative are used as
+# ~11px badge text, so the large-text 3:1 allowance does not apply.
+_TEXT_CONTRAST_MIN = 4.5
+
+
+def _text_safe(rgb: Tuple[int, int, int], bg: Tuple[int, int, int]) -> str:
+    """`rgb` as a `#rrggbb` literal readable as text on `bg`: unchanged if it
+    already reaches _TEXT_CONTRAST_MIN, otherwise moved toward black (on a
+    light bg) or white (on a dark one) in small steps until it does. Both
+    moves scale the channel spread uniformly, so the hue is kept; stopping
+    at the first passing step keeps it as close to the brand color as the
+    threshold allows. One of black/white always passes against any bg, so
+    the loop always ends with a passing color."""
+    toward_black = _contrast_ratio((0, 0, 0), bg) >= _contrast_ratio((255, 255, 255), bg)
+    candidate = rgb
+    for step in range(201):
+        t = step / 200
+        if toward_black:
+            candidate = tuple(round(c * (1 - t)) for c in rgb)
+        else:
+            candidate = tuple(round(c + (255 - c) * t) for c in rgb)
+        if _contrast_ratio(candidate, bg) >= _TEXT_CONTRAST_MIN:
+            break
+    return "#{:02x}{:02x}{:02x}".format(*candidate)
 
 
 def _color_tokens(export: DesignExport) -> List[Token]:
@@ -511,13 +574,20 @@ def _color_mappings(export: DesignExport) -> "Dict[str, Tuple[Token, Optional[st
         contrast = "#000000" if (lum is not None and lum > 0.5) else "#ffffff"
         result["--jm-accent-contrast"] = (accent, contrast)
 
-    positive = _pick_hue(colors, _POSITIVE_KEYWORDS)
-    if positive:
-        result["--jm-positive"] = (positive, None)
-
-    negative = _pick_hue(colors, _NEGATIVE_KEYWORDS)
-    if negative:
-        result["--jm-negative"] = (negative, None)
+    # positive/negative are status-badge TEXT, so each becomes a computed
+    # literal that reaches AA contrast on the mapped bg (jimemo#jw31). A
+    # brand color that is not a plain hex cannot be measured and stays a
+    # var() alias.
+    bg_rgb = (_rgb(bg.value, tokens_by_name) if bg else None) or (255, 255, 255)
+    for role, keywords in (
+        ("--jm-positive", _POSITIVE_KEYWORDS),
+        ("--jm-negative", _NEGATIVE_KEYWORDS),
+    ):
+        token = _pick_hue(colors, keywords)
+        if not token:
+            continue
+        rgb = _rgb(token.value, tokens_by_name)
+        result[role] = (token, _text_safe(rgb, bg_rgb) if rgb else None)
 
     return result
 
@@ -541,6 +611,30 @@ _ROLE_ORDER = (
     "--jm-border",
     "--jm-positive",
     "--jm-negative",
+)
+
+
+# An imported theme has one light :root block and no dark variant. It
+# follows toolkit/tokens.css's `@media (prefers-color-scheme: dark)` block
+# at equal specificity, so its own colors win by source order -- but any
+# property it does NOT redeclare keeps the dark block's value. These are
+# those properties, copied from tokens.css's light :root block (a test
+# pins the copy) so an OS-dark visitor gets a consistent light page rather
+# than light colors with dark UA chrome, shadows and chart palette
+# (jimemo#jw31). `:root[data-theme="dark"]` (render --theme dark) still
+# wins by specificity.
+_LIGHT_ONLY_DECLS = (
+    ("color-scheme", "light"),
+    ("--jm-shadow-sm", "0 1px 2px rgba(31, 27, 20, 0.05)"),
+    ("--jm-shadow-md", "0 1px 2px rgba(31, 27, 20, 0.05), 0 6px 18px rgba(31, 27, 20, 0.06)"),
+    ("--jm-chart-1", "#2a78d6"),
+    ("--jm-chart-2", "#1baf7a"),
+    ("--jm-chart-3", "#eda100"),
+    ("--jm-chart-4", "#008300"),
+    ("--jm-chart-5", "#4a3aa7"),
+    ("--jm-chart-6", "#e34948"),
+    ("--jm-chart-7", "#e87ba4"),
+    ("--jm-chart-8", "#eb6834"),
 )
 
 
@@ -602,7 +696,10 @@ def _build_header(
         " * Mapped roles above reference the source token via var(), so"
     )
     lines.append(
-        " * editing that token's value below also updates the role."
+        " * editing that token's value below also updates the role; a"
+    )
+    lines.append(
+        " * \"computed from\" role is a literal -- re-run the import instead."
     )
     lines.append(" * All imported tokens are re-declared verbatim below, mapped or not.")
     lines.append(" */")
@@ -672,7 +769,7 @@ def build_theme(export: DesignExport, name: str) -> str:
     color_map = _color_mappings(export)
     for role, (token, literal) in color_map.items():
         role_values[role] = literal if literal is not None else "var({})".format(token.name)
-        mapped_lines.append((role, "computed" if literal is not None else token.name))
+        mapped_lines.append((role, "computed from " + token.name if literal is not None else token.name))
 
     for role in _ROLE_ORDER:
         if role == "--jm-font-prose" or role == "--jm-font-ui":
@@ -698,6 +795,10 @@ def build_theme(export: DesignExport, name: str) -> str:
         body_lines.append("")
         body_lines.append("  /* -- mapped onto jimemo roles -- */")
         body_lines.extend(mapped_decls)
+
+    body_lines.append("")
+    body_lines.append("  /* -- light-only: pin what tokens.css's dark block would leave -- */")
+    body_lines.extend("  {}: {};".format(n, v) for n, v in _LIGHT_ONLY_DECLS)
 
     css = header + ":root {\n" + "\n".join(body_lines) + "\n}\n"
 

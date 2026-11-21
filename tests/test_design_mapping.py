@@ -392,8 +392,128 @@ def test_positive_and_negative_map_to_green_and_red():
     _, css = _theme()
     positive = re.search(r"--jm-positive:\s*([^;]+);", css)
     negative = re.search(r"--jm-negative:\s*([^;]+);", css)
-    assert positive and positive.group(1).strip() == "var(--nw-green)"
-    assert negative and negative.group(1).strip() == "var(--nw-red)"
+    assert positive and negative
+    pos, neg = positive.group(1).strip(), negative.group(1).strip()
+    # computed literals, not var() aliases: the badge text must read on
+    # the mapped --jm-bg (--nw-paper -> #ffffff), whatever the raw token
+    assert _HEX6.match(pos) and _HEX6.match(neg)
+    assert _contrast(pos, "#ffffff") >= 4.5
+    assert _contrast(neg, "#ffffff") >= 4.5
+    # Ridge Green #4c9a3b fails (~3.4:1) so it is darkened, keeping its hue;
+    # Trail Red #c31f1f already passes and is emitted unchanged
+    assert pos != "#4c9a3b"
+    assert _hue(pos) == pytest.approx(_hue("#4c9a3b"), abs=2)
+    assert neg == "#c31f1f"
+
+
+_HEX6 = re.compile(r"^#[0-9a-f]{6}$")
+
+
+def _rgb(hex_color):
+    h = hex_color.lstrip("#")
+    return tuple(int(h[i:i + 2], 16) for i in (0, 2, 4))
+
+
+def _rel_lum(hex_color):
+    def lin(c):
+        c /= 255
+        return c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
+
+    r, g, b = (lin(c) for c in _rgb(hex_color))
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b
+
+
+def _contrast(a, b):
+    la, lb = sorted((_rel_lum(a), _rel_lum(b)), reverse=True)
+    return (la + 0.05) / (lb + 0.05)
+
+
+def _hue(hex_color):
+    import colorsys
+
+    r, g, b = (c / 255 for c in _rgb(hex_color))
+    return colorsys.rgb_to_hsv(r, g, b)[0] * 360
+
+
+def _palette_export(bg_value=None, **colors):
+    tokens = [Token("--x-ink", "#111111", "color")]
+    if bg_value is not None:
+        tokens.append(Token("--x-paper", bg_value, "color"))
+    tokens += [Token(name, value, "color") for name, value in colors.items()]
+    return DesignExport(tokens=tokens, fonts=[], brand_fonts=[], namespace="x")
+
+
+def _role(css, role):
+    m = re.search(re.escape(role) + r":\s*([^;]+);", css)
+    return m.group(1).strip() if m else None
+
+
+def test_pale_positive_and_negative_are_darkened_to_aa_contrast():
+    # sage and orange from the joi-ito export that prompted jimemo#jw31:
+    # ~2.3:1 and ~2.6:1 on white as 11px badge text
+    export = _palette_export(**{"--x-green": "#8DB1A7", "--x-red": "#EA8358"})
+    css = build_theme(export, "pale")
+    pos, neg = _role(css, "--jm-positive"), _role(css, "--jm-negative")
+    assert _HEX6.match(pos) and _HEX6.match(neg)
+    for out, src in ((pos, "#8db1a7"), (neg, "#ea8358")):
+        ratio = _contrast(out, "#ffffff")
+        assert ratio >= 4.5
+        # darkened toward the threshold, not all the way to near-black
+        assert ratio < 5.0
+        assert _hue(out) == pytest.approx(_hue(src), abs=2)
+
+
+def test_positive_contrast_is_measured_against_the_mapped_bg():
+    # a cream bg is darker than white, so the same green needs more darkening
+    export = _palette_export(bg_value="#f3ecd6", **{"--x-green": "#8DB1A7"})
+    css = build_theme(export, "cream")
+    pos = _role(css, "--jm-positive")
+    assert _contrast(pos, "#f3ecd6") >= 4.5
+
+
+def test_passing_brand_color_is_emitted_unchanged_as_a_literal():
+    export = _palette_export(**{"--x-green": "#1E5631"})
+    css = build_theme(export, "dark-green")
+    assert _role(css, "--jm-positive") == "#1e5631"
+
+
+def _light_root_block(tokens_css):
+    m = re.search(r"(?m)^:root\s*\{([^}]*)\}", tokens_css)
+    assert m, "toolkit/tokens.css has no unguarded light :root block"
+    body = re.sub(r"/\*.*?\*/", "", m.group(1), flags=re.S)
+    decls = {}
+    for decl in body.split(";"):
+        if ":" in decl:
+            name, value = decl.split(":", 1)
+            decls[name.strip()] = " ".join(value.split())
+    return decls
+
+
+_LIGHT_ONLY_ROLES = (
+    ["color-scheme", "--jm-shadow-sm", "--jm-shadow-md"]
+    + ["--jm-chart-{}".format(i) for i in range(1, 9)]
+)
+
+
+def test_root_pins_light_scheme_shadows_and_charts_from_tokens_css():
+    # an imported theme is light-only: its :root follows tokens.css's
+    # prefers-color-scheme:dark block, so anything it does not redeclare
+    # (color-scheme, shadows, chart palette) would stay dark-tuned for an
+    # OS-dark visitor while the colors flip back to light (jimemo#jw31)
+    tokens_css = (Path(__file__).resolve().parents[1] / "toolkit" / "tokens.css").read_text()
+    light = _light_root_block(tokens_css)
+    _, css = _theme()
+    root = re.search(r":root\s*\{([^}]*)\}", re.sub(r"/\*.*?\*/", "", css, flags=re.S))
+    assert root
+    emitted = {}
+    for decl in root.group(1).split(";"):
+        if ":" in decl:
+            name, value = decl.split(":", 1)
+            emitted[name.strip()] = " ".join(value.split())
+    for name in _LIGHT_ONLY_ROLES:
+        assert name in light, name
+        assert emitted.get(name) == light[name], name
+    assert emitted["color-scheme"] == "light"
 
 
 def test_text_bg_surface_map_to_semantic_aliases_not_pink():
