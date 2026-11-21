@@ -1438,3 +1438,166 @@ def test_render_refuses_to_overwrite_a_figure_file_under_another_name(tmp_path, 
                      "--figure", f"FLOW={svg}"]) == 2
         assert "refusing to overwrite it" in capsys.readouterr().err
         assert svg.read_text() == before
+
+
+# --- doctor: installed tombstone assets vs the bundled copy (jimemo#1cym) ---
+
+
+def _cloudflare_config(tmp_path, monkeypatch, project="friend-notes"):
+    cfg = tmp_path / "config.toml"
+    cfg.write_text(
+        "[publish]\n"
+        'backend = "cloudflare"\n'
+        "[publish.cloudflare]\n"
+        f'project = "{project}"\n'
+        'account_id = "acct"\n'
+        'kv_namespace_id = "kv"\n'
+        'base_url = "https://friend-notes.pages.dev"\n'
+    )
+    monkeypatch.setenv("JIMEMO_CONFIG", str(cfg))
+    state_dir = tmp_path / "state" / project
+    seen = []
+
+    def fake_default_state_dir(name):
+        seen.append(name)
+        return state_dir
+
+    monkeypatch.setattr(
+        "jimemo.publish.cloudflare_backend._default_state_dir",
+        fake_default_state_dir,
+    )
+    return state_dir, seen
+
+
+def _installed_state_dir(tmp_path, monkeypatch):
+    from jimemo.publish.cloudflare_backend import _install_state_dir_assets
+
+    state_dir, seen = _cloudflare_config(tmp_path, monkeypatch)
+    _install_state_dir_assets(state_dir)
+    return state_dir, seen
+
+
+def test_doctor_reports_installed_publish_assets_current(
+    tmp_path, monkeypatch, capsys
+):
+    state_dir, seen = _installed_state_dir(tmp_path, monkeypatch)
+    assert main(["doctor"]) == 0
+    out = capsys.readouterr().out
+    assert seen == ["friend-notes"]
+    assert "ok   publish assets installed in" in out
+    assert str(state_dir) in out
+    assert "setup --assets-only" not in out
+
+
+def test_doctor_warns_when_installed_middleware_differs(
+    tmp_path, monkeypatch, capsys
+):
+    state_dir, _ = _installed_state_dir(tmp_path, monkeypatch)
+    (state_dir / "functions" / "_middleware.js").write_text("// old middleware\n")
+    assert main(["doctor"]) == 0
+    out = capsys.readouterr().out
+    warnings = [line for line in out.splitlines() if line.startswith("WARNING publish")]
+    assert len(warnings) == 1
+    assert "functions/_middleware.js" in warnings[0]
+    assert "installed" in warnings[0]
+    assert "deployed" not in warnings[0]
+    assert "jimemo publish setup --assets-only" in warnings[0]
+
+
+def test_doctor_warns_when_installed_headers_differ(tmp_path, monkeypatch, capsys):
+    state_dir, _ = _installed_state_dir(tmp_path, monkeypatch)
+    (state_dir / "_headers").write_text("/*\n  X-Old: 1\n")
+    assert main(["doctor"]) == 0
+    out = capsys.readouterr().out
+    warnings = [line for line in out.splitlines() if line.startswith("WARNING publish")]
+    assert len(warnings) == 1
+    assert "_headers" in warnings[0]
+    assert "_middleware.js" not in warnings[0]
+    assert "jimemo publish setup --assets-only" in warnings[0]
+
+
+def test_doctor_ignores_a_changed_index_html(tmp_path, monkeypatch, capsys):
+    state_dir, _ = _installed_state_dir(tmp_path, monkeypatch)
+    (state_dir / "index.html").write_text("<p>customized</p>\n")
+    assert main(["doctor"]) == 0
+    out = capsys.readouterr().out
+    assert "WARNING publish" not in out
+    assert "ok   publish assets installed in" in out
+
+
+def test_doctor_warns_when_an_installed_asset_is_missing(
+    tmp_path, monkeypatch, capsys
+):
+    state_dir, _ = _installed_state_dir(tmp_path, monkeypatch)
+    (state_dir / "functions" / "_middleware.js").unlink()
+    assert main(["doctor"]) == 0
+    out = capsys.readouterr().out
+    warnings = [line for line in out.splitlines() if line.startswith("WARNING publish")]
+    assert len(warnings) == 1
+    assert "functions/_middleware.js" in warnings[0]
+    assert "missing" in warnings[0]
+    assert "jimemo publish setup --assets-only" in warnings[0]
+
+
+def test_doctor_reports_an_unreadable_installed_asset(tmp_path, monkeypatch, capsys):
+    state_dir, _ = _installed_state_dir(tmp_path, monkeypatch)
+    headers = state_dir / "_headers"
+    headers.unlink()
+    headers.mkdir()  # a directory where a file belongs: read_bytes raises
+    assert main(["doctor"]) == 0
+    out = capsys.readouterr().out
+    warnings = [line for line in out.splitlines() if line.startswith("WARNING publish")]
+    assert len(warnings) == 1
+    assert "_headers" in warnings[0]
+    assert "unreadable" in warnings[0]
+    assert "Traceback" not in out
+
+
+def test_doctor_is_silent_without_a_state_directory(tmp_path, monkeypatch, capsys):
+    _cloudflare_config(tmp_path, monkeypatch)
+    assert main(["doctor"]) == 0
+    out = capsys.readouterr().out
+    assert "publish assets" not in out
+    assert "WARNING publish" not in out
+
+
+def test_doctor_is_silent_for_the_command_backend(tmp_path, monkeypatch, capsys):
+    cfg = tmp_path / "config.toml"
+    cfg.write_text('[publish]\nbackend = "command"\ncommand = "true"\n')
+    monkeypatch.setenv("JIMEMO_CONFIG", str(cfg))
+    called = []
+    monkeypatch.setattr(
+        "jimemo.publish.cloudflare_backend._default_state_dir",
+        lambda name: called.append(name) or tmp_path,
+    )
+    assert main(["doctor"]) == 0
+    out = capsys.readouterr().out
+    assert called == []
+    assert "publish assets" not in out
+    assert "WARNING publish" not in out
+
+
+def test_doctor_is_silent_without_a_config_file(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("JIMEMO_CONFIG", str(tmp_path / "absent.toml"))
+    assert main(["doctor"]) == 0
+    out = capsys.readouterr().out
+    assert "publish assets" not in out
+    assert "WARNING publish" not in out
+
+
+def test_doctor_asset_check_uses_the_installers_source(tmp_path, monkeypatch, capsys):
+    """The check reads the bytes from the same place the installer copies
+    them from: point the installer's source somewhere else and an install
+    from it reads as current."""
+    from jimemo.publish import cloudflare_backend
+
+    src = tmp_path / "bundled"
+    src.mkdir()
+    for name in ("_middleware.js", "_headers", "index.html"):
+        (src / name).write_text(f"// alternate {name}\n")
+    monkeypatch.setattr(cloudflare_backend, "CLOUDFLARE_ASSETS_DIR", src)
+    _installed_state_dir(tmp_path, monkeypatch)
+    assert main(["doctor"]) == 0
+    out = capsys.readouterr().out
+    assert "WARNING publish" not in out
+    assert "ok   publish assets installed in" in out

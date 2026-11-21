@@ -247,7 +247,10 @@ The state directory keeps its own copy of `functions/_middleware.js`,
 `_headers`, and the root index, installed at setup time. `jimemo
 publish` self-heals a *missing* file but deliberately never overwrites
 an existing one — so after a `git pull` that changes the middleware,
-existing sites keep serving the old copy until you run:
+existing sites keep serving the old copy until you run the command
+below. `jimemo doctor` warns when the installed middleware or `_headers`
+differs from the bundled copy; it compares local files only, so it
+cannot tell you what Cloudflare is serving.
 
 ```
 jimemo publish setup --assets-only
