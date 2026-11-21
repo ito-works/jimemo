@@ -33,6 +33,9 @@ DARK = ["#3987e5", "#199e70", "#c98500", "#008300",
         "#9085e9", "#e66767", "#d55181", "#d95926"]
 DARK_TOKENS = {f"--jm-chart-{i + 1}": c for i, c in enumerate(DARK)}
 LIGHT_TOKENS = {f"--jm-chart-{i + 1}": c for i, c in enumerate(DEFAULT_PALETTE)}
+# Chart chrome (jimemo#e2sb): text from --jm-muted, lines from --jm-border.
+DARK_CHROME = {"--jm-muted": "#a29b8d", "--jm-border": "#34383f"}
+LIGHT_CHROME = {"--jm-muted": "#6b6459", "--jm-border": "#e4e0d8"}
 
 # Reads {body, tokens, steps} on stdin. Steps: ["tokens", {...}],
 # ["mutate"] (data-theme changed), ["media"] (prefers-color-scheme
@@ -55,14 +58,20 @@ process.stdin.on("end", () => {
     if (el !== global.document.documentElement) throw new Error("wrong element");
     return {getPropertyValue: name => current[name] || ""};
   };
+  const on = (key, fn) => { (listeners[key] = listeners[key] || []).push(fn); };
+  const fire = key => listeners[key].forEach(fn => fn());
+  const observers = [];
   global.matchMedia = query => ({
-    addEventListener: (type, fn) => { listeners["media:" + query + ":" + type] = fn; },
+    addEventListener: (type, fn) => { on("media:" + query + ":" + type, fn); },
   });
   global.MutationObserver = function (fn) {
-    this.observe = (target, opts) => { observer = {fn, target, opts}; };
+    this.observe = (target, opts) => { observer = {fn, target, opts}; observers.push(observer); };
   };
-  global.addEventListener = (type, fn) => { listeners[type] = fn; };
+  global.addEventListener = (type, fn) => { on(type, fn); };
   const charts = [];
+  const LIB = {color: "#666", borderColor: "rgba(0,0,0,0.1)"};
+  const chrome = () => ({color: Chart.defaults.color, borderColor: Chart.defaults.borderColor});
+  const scales = o => o.scales === undefined ? null : JSON.parse(JSON.stringify(o.scales));
   global.Chart = function (el, cfg) {
     this.el = el;
     this.data = cfg.data;
@@ -70,29 +79,50 @@ process.stdin.on("end", () => {
     this.updates = 0;
     this.mode = null;
     this.first = JSON.parse(JSON.stringify(cfg.data.datasets));
+    this.firstChrome = chrome();
+    this.live = cfg.options;
+    this.atUpdate = [];
+    // Like Chart.js, bake the defaults' colors into cfg.options.scales.
+    const merge = () => {
+      if (cfg.type === "doughnut" || cfg.type === "pie") { cfg.options.scales = cfg.options.scales || {}; return; }
+      const sc = cfg.options.scales = cfg.options.scales || {};
+      for (const id of ["x", "y"]) {
+        const s = sc[id] = sc[id] || {};
+        s.ticks = Object.assign({color: Chart.defaults.color}, s.ticks);
+        s.grid = Object.assign({color: Chart.defaults.borderColor}, s.grid);
+      }
+    };
+    merge();
     this.update = mode => {
+      this.atUpdate.push({chrome: chrome(), scales: scales(cfg.options)});
+      merge();
       this.updates += 1;
       this.mode = mode === undefined ? "default" : mode;
     };
     charts.push(this);
   };
+  global.Chart.defaults = Object.assign({}, LIB);
   eval(body);
   const chart = charts[0];
   const colors = ds => ds.map(d => ({bg: d.backgroundColor, border: d.borderColor}));
   const snaps = [];
   for (const [op, arg] of steps) {
     if (op === "tokens") current = arg;
-    else if (op === "mutate") observer.fn([]);
-    else if (op === "media") listeners["media:(prefers-color-scheme: dark):change"]();
-    else if (op === "beforeprint" || op === "afterprint") listeners[op]();
+    else if (op === "mutate") observers.forEach(o => o.fn([]));
+    else if (op === "media") fire("media:(prefers-color-scheme: dark):change");
+    else if (op === "beforeprint" || op === "afterprint") fire(op);
     else if (op === "snap") snaps.push({
       colors: colors(chart.data.datasets), updates: chart.updates, mode: chart.mode,
+      chrome: chrome(),
+      atUpdate: charts.map(c => c.atUpdate[c.atUpdate.length - 1] || null),
     });
   }
   console.log(JSON.stringify({
     charts: charts.length,
     el: chart.el,
     first: colors(chart.first),
+    firstChrome: charts.map(c => c.firstChrome),
+    jimemo: global.Chart.jimemo,
     options: chart.options,
     observer: {opts: observer.opts, rootIsHtml: observer.target === global.document.documentElement},
     snaps,
@@ -101,8 +131,10 @@ process.stdin.on("end", () => {
 """
 
 
-def run(config, tokens, steps=()):
+def run(config, tokens, steps=(), extra=()):
     body = chart_init_js("c1", serialize_chart_config(config))
+    for i, other in enumerate(extra):
+        body += chart_init_js(f"c{i + 2}", serialize_chart_config(other))
     proc = subprocess.run(
         [NODE, "-e", DRIVER],
         input=json.dumps({"body": body, "tokens": tokens, "steps": list(steps)}),
@@ -181,6 +213,11 @@ def test_data_theme_change_repaints():
     assert out["snaps"] == [{
         "colors": [{"bg": DEFAULT_PALETTE[0], "border": DEFAULT_PALETTE[0]}],
         "updates": 1, "mode": "jimemo",
+        "chrome": {"color": "#666", "borderColor": "rgba(0,0,0,0.1)"},
+        "atUpdate": [{
+            "chrome": {"color": "#666", "borderColor": "rgba(0,0,0,0.1)"},
+            "scales": None,
+        }],
     }]
 
 
@@ -221,3 +258,93 @@ def test_print_uses_the_baked_light_palette_then_restores():
     assert printed["colors"] == [{"bg": list(DEFAULT_PALETTE[:3])}]
     assert restored["colors"] == [{"bg": DARK[:3]}]
     assert restored["updates"] == 2
+
+
+# --- chart chrome: tick/legend text and grid lines (jimemo#e2sb) ---
+# Chart.js 4.5.1 reads tick, legend and scale-title text from
+# Chart.defaults.color and grid/axis lines from Chart.defaults.borderColor,
+# so the runtime sets those page-wide defaults; the driver's fake Chart
+# bakes them into cfg.options.scales at construction and at each update,
+# as Chart.js's mergeScaleConfig does.
+
+LIB = {"color": "#666", "borderColor": "rgba(0,0,0,0.1)"}
+DARK_LIB = {"color": "#a29b8d", "borderColor": "#34383f"}
+LIGHT_LIB = {"color": "#6b6459", "borderColor": "#e4e0d8"}
+
+
+def test_first_draw_takes_chrome_colors_from_the_tokens():
+    out = run(bar_config(1), {**DARK_TOKENS, **DARK_CHROME})
+    assert out["firstChrome"] == [DARK_LIB]
+    # The library's own values are kept for print and empty tokens.
+    assert out["jimemo"] == ["#666", "rgba(0,0,0,0.1)"]
+    # Nothing is added to the chart's own options.
+    assert out["options"] == {"transitions": {"jimemo": {"animation": {"duration": 0}}}}
+
+
+def test_chrome_tokens_are_trimmed():
+    out = run(bar_config(1), {"--jm-muted": " #a29b8d ", "--jm-border": "\t#34383f"})
+    assert out["firstChrome"] == [DARK_LIB]
+
+
+def test_empty_chrome_tokens_leave_the_library_defaults():
+    out = run(bar_config(1), {**DARK_TOKENS, "--jm-muted": "#a29b8d"})
+    assert out["firstChrome"] == [{"color": "#a29b8d", "borderColor": "rgba(0,0,0,0.1)"}]
+
+
+def test_explicit_caller_chrome_options_are_untouched():
+    config = bar_config(1)
+    config["options"] = {"color": "#111111", "borderColor": "#222222",
+                         "scales": {"x": {"ticks": {"color": "#333333"}}}}
+    out = run(config, {**DARK_TOKENS, **LIGHT_CHROME},
+              [["tokens", {**DARK_TOKENS, **DARK_CHROME}], ["mutate"], ["snap"]])
+    assert out["options"]["color"] == "#111111"
+    assert out["options"]["borderColor"] == "#222222"
+    assert out["options"]["scales"] == {"x": {"ticks": {"color": "#333333"}}}
+    # Before the repaint's update, the caller's own scales come back
+    # (the baked colors are dropped, the caller's one is kept).
+    assert out["snaps"][0]["atUpdate"] == [{
+        "chrome": DARK_LIB,
+        "scales": {"x": {"ticks": {"color": "#333333"}}},
+    }]
+
+
+def test_doughnut_gets_no_options_and_no_cartesian_scales():
+    out = run(pie_config(), {**DARK_TOKENS, **DARK_CHROME},
+              [["mutate"], ["snap"]])
+    assert out["options"] == {"transitions": {"jimemo": {"animation": {"duration": 0}}}}
+    assert out["firstChrome"] == [DARK_LIB]
+    assert out["snaps"][0]["atUpdate"] == [{"chrome": DARK_LIB, "scales": None}]
+
+
+def test_theme_change_repaints_the_chrome_before_the_update():
+    out = run(bar_config(1), {**LIGHT_TOKENS, **LIGHT_CHROME},
+              [["tokens", {**DARK_TOKENS, **DARK_CHROME}], ["mutate"], ["snap"],
+               ["tokens", {**LIGHT_TOKENS, **LIGHT_CHROME}], ["media"], ["snap"]])
+    dark, light = out["snaps"]
+    # The defaults are set and the baked scales dropped before update().
+    assert dark["atUpdate"] == [{"chrome": DARK_LIB, "scales": None}]
+    assert dark["mode"] == "jimemo" and dark["updates"] == 1
+    assert light["atUpdate"] == [{"chrome": LIGHT_LIB, "scales": None}]
+    assert light["updates"] == 2
+
+
+def test_print_uses_the_library_chrome_then_restores():
+    out = run(bar_config(1), {**DARK_TOKENS, **DARK_CHROME},
+              [["beforeprint"], ["snap"], ["afterprint"], ["snap"]])
+    printed, restored = out["snaps"]
+    # Print is always light: the library's own dark-on-white defaults.
+    assert printed["atUpdate"] == [{"chrome": LIB, "scales": None}]
+    assert restored["atUpdate"] == [{"chrome": DARK_LIB, "scales": None}]
+
+
+def test_a_second_chart_does_not_take_the_tokens_for_the_library_values():
+    out = run(bar_config(1), {**DARK_TOKENS, **DARK_CHROME},
+              [["beforeprint"], ["snap"]], extra=[pie_config()])
+    assert out["charts"] == 2
+    assert out["firstChrome"] == [DARK_LIB, DARK_LIB]
+    assert out["jimemo"] == ["#666", "rgba(0,0,0,0.1)"]
+    # Both charts print with the library's values.
+    assert out["snaps"][0]["atUpdate"] == [
+        {"chrome": LIB, "scales": None},
+        {"chrome": LIB, "scales": None},
+    ]

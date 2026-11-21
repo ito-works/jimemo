@@ -268,7 +268,11 @@ def build_chart_config(
 #     DEFAULT_PALETTE[i] with the page's computed --jm-chart-(i+1)
 #     (empty token -> keep the baked value; any other color, e.g. a
 #     direct caller's custom palette, is never touched);
-#   - repaints when prefers-color-scheme changes or <html data-theme>
+#   - before the first draw, sets Chart.defaults.color (tick, legend
+#     text) from --jm-muted and Chart.defaults.borderColor (grid, axis
+#     lines) from --jm-border (jimemo#e2sb; why the defaults and not
+#     the chart's own options: see _THEME_RUNTIME_HEAD_JS);
+#   - repaints series and chrome when prefers-color-scheme changes or <html data-theme>
 #     changes, with chart.update("jimemo"): a custom update mode whose
 #     transition the runtime sets to duration 0 before construction
 #     (options.transitions.jimemo), so the redraw is synchronous and
@@ -281,10 +285,16 @@ def build_chart_config(
 #     Chromium);
 #   - on beforeprint paints the baked light values (print always uses
 #     the light palette, and print-force.css does not set the chart
-#     tokens), and on afterprint goes back to the tokens.
+#     tokens) and Chart.js's own light chrome defaults, and on
+#     afterprint goes back to the tokens.
 # It contains no "<" (checked at import below), so it cannot close the
 # script element it sits in.
-_THEME_RUNTIME_HEAD_JS = (
+#
+# The runtime's head up to `new Chart` as jimemo#7n1f wrote it, before
+# it read the chart chrome tokens. Frozen: the two older recognized
+# shapes below are built from it, so editing it would stop pages that
+# jimemo 0.0.3 and 0.0.4 rendered from passing `jimemo check`.
+_RUNTIME_HEAD_JS_7N1F = (
     "var P=" + json.dumps(list(DEFAULT_PALETTE), separators=(",", ":")) + ","
     "R=document.documentElement,"
     "O=cfg.data.datasets.map(function(d){return[d.backgroundColor,d.borderColor]}),"
@@ -305,6 +315,56 @@ _THEME_RUNTIME_HEAD_JS = (
     "t.jimemo={animation:{duration:0}};"
     "ch=new Chart(el,cfg);"
 )
+# The current head adds the chart chrome (jimemo#e2sb). Chart.js 4.5.1
+# routes tick, scale-title and legend text to Chart.defaults.color and
+# grid and axis lines to Chart.defaults.borderColor; a chart's own
+# top-level options.color reaches only its legend, and its top-level
+# options.borderColor also becomes a doughnut's slice borders (both
+# measured in Chromium). The theme is page-wide, so b() sets those two
+# defaults (L) from --jm-muted and --jm-border, read from the same
+# computed style as the series tokens. An empty token, or print, puts
+# back the library's own value, which the first chart on the page keeps
+# on the Chart constructor (Z) so later charts do not take a token for
+# it. A caller's own options.color, borderColor or scale colors still
+# win: they sit above the defaults in Chart.js's lookup. No option is
+# added to the config, so a pie or doughnut gains no cartesian scales.
+# Chart.js copies the defaults' colors into cfg.options.scales when it
+# builds a chart, so before the repaint u() puts back the caller's own
+# scales (S, a JSON copy taken before construction; deleted when the
+# caller set none) and the update merges the new defaults in again.
+_THEME_RUNTIME_HEAD_JS = (
+    "var P=" + json.dumps(list(DEFAULT_PALETTE), separators=(",", ":")) + ","
+    "R=document.documentElement,"
+    "O=cfg.data.datasets.map(function(d){return[d.backgroundColor,d.borderColor]}),"
+    "L=Chart.defaults,"
+    "Z=Chart.jimemo=Chart.jimemo||[L.color,L.borderColor],"
+    "ch,S;"
+    "function a(D,p){"
+    "var s=p?null:getComputedStyle(R);"
+    "function k(c){"
+    "var i=s?P.indexOf(c):-1,"
+    "v=i==-1?\"\":s.getPropertyValue(\"--jm-chart-\"+(i+1)).trim();"
+    "return v||c}"
+    "function m(v){return Array.isArray(v)?v.map(k):k(v)}"
+    "D.forEach(function(d,i){"
+    "d.backgroundColor=m(O[i][0]);"
+    "if(O[i][1]!==void 0)d.borderColor=m(O[i][1])})}"
+    "function b(p){"
+    "var s=p?null:getComputedStyle(R);"
+    "function g(w,z){return(s?s.getPropertyValue(w).trim():\"\")||z}"
+    "L.color=g(\"--jm-muted\",Z[0]);"
+    "L.borderColor=g(\"--jm-border\",Z[1])}"
+    "function u(p){"
+    "a(ch.data.datasets,p);b(p);"
+    "if(S===void 0)delete q.scales;else q.scales=JSON.parse(S);"
+    "ch.update(\"jimemo\")}"
+    "a(cfg.data.datasets,!1);"
+    "var q=cfg.options=cfg.options||{},t=q.transitions=q.transitions||{};"
+    "S=JSON.stringify(q.scales);"
+    "b(!1);"
+    "t.jimemo={animation:{duration:0}};"
+    "ch=new Chart(el,cfg);"
+)
 _THEME_RUNTIME_TAIL_JS = (
     "matchMedia(\"(prefers-color-scheme: dark)\")"
     ".addEventListener(\"change\",function(){u(!1)});"
@@ -314,6 +374,7 @@ _THEME_RUNTIME_TAIL_JS = (
     "addEventListener(\"afterprint\",function(){u(!1)})"
 )
 _THEME_RUNTIME_JS = _THEME_RUNTIME_HEAD_JS + _THEME_RUNTIME_TAIL_JS
+_THEME_RUNTIME_JS_7N1F = _RUNTIME_HEAD_JS_7N1F + _THEME_RUNTIME_TAIL_JS
 # The script-free fallback toggle (jimemo#s3e6). A chart rendered with
 # its data table is static-first: the canvas carries `hidden` and the
 # `<details class="jm-chart-data">` right after it is `open`, so a
@@ -368,9 +429,20 @@ _INIT_JS_RE = _init_js_re(_INIT_JS_PREFIX)
 # `jimemo check` / publish / pdf. Built from the same literal as the
 # current shape, so the two cannot drift apart.
 _THEME_INIT_JS_PREFIX = (
-    "(function(el,cfg){" + _THEME_RUNTIME_JS + "})(document.getElementById(\""
+    "(function(el,cfg){" + _THEME_RUNTIME_JS_7N1F + "})(document.getElementById(\""
 )
 _THEME_INIT_JS_RE = _init_js_re(_THEME_INIT_JS_PREFIX)
+
+# The jimemo#s3e6 shape: the fallback toggle around the 7n1f runtime,
+# emitted by jimemo 0.0.4 before the runtime read the chart chrome
+# tokens (jimemo#e2sb). Recognized, never emitted, so pages it rendered
+# keep passing `jimemo check` / publish / pdf.
+_FALLBACK_INIT_JS_PREFIX = (
+    "(function(el,cfg){" + _FALLBACK_OPEN_JS + _RUNTIME_HEAD_JS_7N1F
+    + _FALLBACK_CLOSE_JS + _THEME_RUNTIME_TAIL_JS
+    + "})(document.getElementById(\""
+)
+_FALLBACK_INIT_JS_RE = _init_js_re(_FALLBACK_INIT_JS_PREFIX)
 
 # The init shape before jimemo#7n1f: the bare construction, no theme
 # runtime. parse_chart_init_js still RECOGNIZES it so a page rendered by
@@ -389,7 +461,8 @@ def chart_init_js(chart_id: str, config_json: str) -> str:
 
     The theme runtime (see _THEME_RUNTIME_JS) builds the chart with
     ``new Chart(el, cfg)`` after mapping the baked palette onto the
-    page's current --jm-chart-N tokens, and repaints on theme changes.
+    page's current --jm-chart-N tokens and setting Chart.js's chrome
+    defaults from --jm-muted / --jm-border, and repaints on theme changes.
 
     ``chart_id`` must be a manifest-validated chart id and
     ``config_json`` must be serialize_chart_config output; both are
@@ -411,14 +484,17 @@ def chart_init_js(chart_id: str, config_json: str) -> str:
 
 def parse_chart_init_js(script_body: str) -> Optional[Tuple[str, str]]:
     """``(chart_id, config_json)`` if ``script_body`` has exactly the
-    byte shape chart_init_js emits — or one of the two older shapes kept
-    so older rendered pages still pass: the jimemo#7n1f theme runtime
-    without the jimemo#s3e6 fallback toggle, and the pre-7n1f
+    byte shape chart_init_js emits — or one of the three older shapes kept
+    so older rendered pages still pass: the jimemo#s3e6 shape from before
+    the runtime read chart chrome tokens (jimemo#e2sb), the jimemo#7n1f
+    theme runtime without the s3e6 fallback toggle, and the pre-7n1f
     ``new Chart(document.getElementById("<id>"), <config_json>);`` —
     else None. Recognition only —
     the caller (lint) still judges whether the id is declared and the
     config text is the safe-serialized form."""
     match = _INIT_JS_RE.fullmatch(script_body)
+    if match is None:
+        match = _FALLBACK_INIT_JS_RE.fullmatch(script_body)
     if match is None:
         match = _THEME_INIT_JS_RE.fullmatch(script_body)
     if match is None:

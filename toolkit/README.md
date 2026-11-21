@@ -104,8 +104,14 @@ Print uses the baked light values, as the rest of the page does — so a
 theme that overrides these tokens shows its chart colors on screen but
 prints the default light palette. Colors a
 caller passes through a custom `palette=` are left as built, unless one
-equals a `DEFAULT_PALETTE` value. Axis, legend and grid colors inside the
-canvas are still Chart.js defaults and do not follow the theme.
+equals a `DEFAULT_PALETTE` value. Axis, legend and grid colors follow the
+theme the same way: the init script sets Chart.js's page-wide
+`Chart.defaults.color` from `--jm-muted` and `Chart.defaults.borderColor`
+from `--jm-border` and repaints them with the series (a chart's own
+top-level `color` reaches only its legend in Chart.js 4.5.1, and its
+`borderColor` would also recolor doughnut slice borders). A color a caller
+sets in a chart's own options still wins; print and an empty token use
+Chart.js's own defaults.
 
 ### Space, radius, elevation, layout
 
