@@ -155,10 +155,14 @@ def test_pytest_still_exits_2_on_a_collection_error(tmp_path):
 def test_docs_name_ci_gate_sh_as_the_registry_row():
     # The repoman registry row for jimemo runs ci/gate.sh, not a bare pytest
     # (jibot-code#gpt2, jimemo#h8rq). The docs that describe the row say so.
-    landing = (REPO / "AGENTS.md").read_text().split(
-        "## Landing changes", 1)[1]
-    assert "runs `ci/gate.sh`" in landing
-    assert "runs `python3 -m pytest" not in landing
+    landing = " ".join((REPO / "AGENTS.md").read_text().split(
+        "## Landing changes", 1)[1].split())
+    assert "runs `ci/gate.sh` (the registry row's command," in landing
+    # Repoman runs the script; pytest is only what the script runs.
+    assert "Repoman rebases the branch onto current `main`, runs `python3" \
+        not in landing
+    assert "row's command: `python3" not in landing
+    assert "row's command is `python3" not in landing
     doc = sys.modules[__name__].__doc__
     assert "The row is `ci/gate.sh`" in doc
     assert "The row is `python3 -m pytest" not in doc
