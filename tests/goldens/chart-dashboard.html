@@ -43,12 +43,15 @@
    * small multiples, per the dataviz skill's non-negotiables). It is
    * deliberately brand-neutral rather than derived from --jm-accent:
    * chart series need an identity channel distinct from that
-   * editorial role. The chart library renders to a bitmap drawing
-   * surface it paints itself and cannot read custom properties from,
-   * so these tokens are CSS-only chrome/documentation — src/jimemo/
-   * charts.py DEFAULT_PALETTE is the source of truth for rendered
-   * chart colors and its light-mode values must match this block
-   * exactly (tests/test_charts.py checks the two stay in sync).
+   * editorial role. The chart library paints its own bitmap, which
+   * cannot read custom properties itself, so each chart's init script
+   * reads them at view time: it swaps the series colors src/jimemo/
+   * charts.py DEFAULT_PALETTE baked into the config for these
+   * --jm-chart-N values, sets the axis, legend and grid colors from
+   * --jm-muted and --jm-border, and repaints when the theme changes.
+   * DEFAULT_PALETTE is what print and an empty token fall back to,
+   * so its values must match this block's light-mode values exactly
+   * (tests/test_charts.py checks the two stay in sync).
    * Validated with dataviz/scripts/validate_palette.js against both
    * --jm-bg and --jm-surface (the drawing surface has no fill of its
    * own, so it shows whichever it's placed on), light and dark; see
@@ -658,10 +661,11 @@ body {
 
 /* chart-block — a labeled wrapper around one Chart.js canvas. The
  * canvas is Chart.js's own drawing surface (sized by its `responsive`
- * default against this block's width) and cannot read these custom
- * properties, so only the title and spacing are styled here; the
- * rendered colors come from charts.py's DEFAULT_PALETTE (see
- * tokens.css's chart-palette note for why the two must stay in sync). */
+ * default against this block's width) and CSS cannot style what it
+ * paints, so only the title and spacing are styled here. The canvas
+ * colors come from the chart's init script, which reads --jm-chart-N,
+ * --jm-muted and --jm-border at view time and repaints on a theme
+ * change (see tokens.css's chart-palette note). */
 
 .jm-chart-block {
   margin-block: var(--jm-space-6);
@@ -959,7 +963,7 @@ each channel's weekly values so the chart can be checked by hand.</p>
   </table>
   </div>
 </details>
-<script>(function(el,cfg){if(typeof Chart!="function")return;el.hidden=!1;var P=["#2a78d6","#1baf7a","#eda100","#008300","#4a3aa7","#e34948","#e87ba4","#eb6834"],R=document.documentElement,O=cfg.data.datasets.map(function(d){return[d.backgroundColor,d.borderColor]}),ch;function a(D,p){var s=p?null:getComputedStyle(R);function k(c){var i=s?P.indexOf(c):-1,v=i==-1?"":s.getPropertyValue("--jm-chart-"+(i+1)).trim();return v||c}function m(v){return Array.isArray(v)?v.map(k):k(v)}D.forEach(function(d,i){d.backgroundColor=m(O[i][0]);if(O[i][1]!==void 0)d.borderColor=m(O[i][1])})}function u(p){a(ch.data.datasets,p);ch.update("jimemo")}a(cfg.data.datasets,!1);var q=cfg.options=cfg.options||{},t=q.transitions=q.transitions||{};t.jimemo={animation:{duration:0}};ch=new Chart(el,cfg);var f=el.nextElementSibling;if(f&&f.classList.contains("jm-chart-data"))f.open=!1;matchMedia("(prefers-color-scheme: dark)").addEventListener("change",function(){u(!1)});new MutationObserver(function(){u(!1)}).observe(R,{attributes:!0,attributeFilter:["data-theme"]});addEventListener("beforeprint",function(){u(!0)});addEventListener("afterprint",function(){u(!1)})})(document.getElementById("signups-trend"), {"type":"line","data":{"labels":["25 May","1 Jun","8 Jun","15 Jun","22 Jun","29 Jun"],"datasets":[{"label":"Organic","data":[120,128,135,140,152,168],"backgroundColor":"#2a78d6","borderColor":"#2a78d6"},{"label":"Paid search","data":[95,101,98,110,118,124],"backgroundColor":"#1baf7a","borderColor":"#1baf7a"},{"label":"Referral","data":[40,44,47,50,53,58],"backgroundColor":"#eda100","borderColor":"#eda100"}]},"options":{}});</script>
+<script>(function(el,cfg){if(typeof Chart!="function")return;el.hidden=!1;var P=["#2a78d6","#1baf7a","#eda100","#008300","#4a3aa7","#e34948","#e87ba4","#eb6834"],R=document.documentElement,O=cfg.data.datasets.map(function(d){return[d.backgroundColor,d.borderColor]}),L=Chart.defaults,Z=Chart.jimemo=Chart.jimemo||[L.color,L.borderColor],ch,S;function a(D,p){var s=p?null:getComputedStyle(R);function k(c){var i=s?P.indexOf(c):-1,v=i==-1?"":s.getPropertyValue("--jm-chart-"+(i+1)).trim();return v||c}function m(v){return Array.isArray(v)?v.map(k):k(v)}D.forEach(function(d,i){d.backgroundColor=m(O[i][0]);if(O[i][1]!==void 0)d.borderColor=m(O[i][1])})}function b(p){var s=p?null:getComputedStyle(R);function g(w,z){return(s?s.getPropertyValue(w).trim():"")||z}L.color=g("--jm-muted",Z[0]);L.borderColor=g("--jm-border",Z[1])}function u(p){a(ch.data.datasets,p);b(p);if(S===void 0)delete q.scales;else q.scales=JSON.parse(S);ch.update("jimemo")}a(cfg.data.datasets,!1);var q=cfg.options=cfg.options||{},t=q.transitions=q.transitions||{};S=JSON.stringify(q.scales);b(!1);t.jimemo={animation:{duration:0}};ch=new Chart(el,cfg);var f=el.nextElementSibling;if(f&&f.classList.contains("jm-chart-data"))f.open=!1;matchMedia("(prefers-color-scheme: dark)").addEventListener("change",function(){u(!1)});new MutationObserver(function(){u(!1)}).observe(R,{attributes:!0,attributeFilter:["data-theme"]});addEventListener("beforeprint",function(){u(!0)});addEventListener("afterprint",function(){u(!1)})})(document.getElementById("signups-trend"), {"type":"line","data":{"labels":["25 May","1 Jun","8 Jun","15 Jun","22 Jun","29 Jun"],"datasets":[{"label":"Organic","data":[120,128,135,140,152,168],"backgroundColor":"#2a78d6","borderColor":"#2a78d6"},{"label":"Paid search","data":[95,101,98,110,118,124],"backgroundColor":"#1baf7a","borderColor":"#1baf7a"},{"label":"Referral","data":[40,44,47,50,53,58],"backgroundColor":"#eda100","borderColor":"#eda100"}]},"options":{}});</script>
 </section>
 
 <section class="jm-chart-block">
@@ -997,7 +1001,7 @@ each channel's weekly values so the chart can be checked by hand.</p>
   </table>
   </div>
 </details>
-<script>(function(el,cfg){if(typeof Chart!="function")return;el.hidden=!1;var P=["#2a78d6","#1baf7a","#eda100","#008300","#4a3aa7","#e34948","#e87ba4","#eb6834"],R=document.documentElement,O=cfg.data.datasets.map(function(d){return[d.backgroundColor,d.borderColor]}),ch;function a(D,p){var s=p?null:getComputedStyle(R);function k(c){var i=s?P.indexOf(c):-1,v=i==-1?"":s.getPropertyValue("--jm-chart-"+(i+1)).trim();return v||c}function m(v){return Array.isArray(v)?v.map(k):k(v)}D.forEach(function(d,i){d.backgroundColor=m(O[i][0]);if(O[i][1]!==void 0)d.borderColor=m(O[i][1])})}function u(p){a(ch.data.datasets,p);ch.update("jimemo")}a(cfg.data.datasets,!1);var q=cfg.options=cfg.options||{},t=q.transitions=q.transitions||{};t.jimemo={animation:{duration:0}};ch=new Chart(el,cfg);var f=el.nextElementSibling;if(f&&f.classList.contains("jm-chart-data"))f.open=!1;matchMedia("(prefers-color-scheme: dark)").addEventListener("change",function(){u(!1)});new MutationObserver(function(){u(!1)}).observe(R,{attributes:!0,attributeFilter:["data-theme"]});addEventListener("beforeprint",function(){u(!0)});addEventListener("afterprint",function(){u(!1)})})(document.getElementById("revenue-by-tier"), {"type":"bar","data":{"labels":["Starter","Growth","Scale","Enterprise"],"datasets":[{"label":"MRR ($k)","data":[18,34,27,21],"backgroundColor":"#2a78d6","borderColor":"#2a78d6"}]},"options":{}});</script>
+<script>(function(el,cfg){if(typeof Chart!="function")return;el.hidden=!1;var P=["#2a78d6","#1baf7a","#eda100","#008300","#4a3aa7","#e34948","#e87ba4","#eb6834"],R=document.documentElement,O=cfg.data.datasets.map(function(d){return[d.backgroundColor,d.borderColor]}),L=Chart.defaults,Z=Chart.jimemo=Chart.jimemo||[L.color,L.borderColor],ch,S;function a(D,p){var s=p?null:getComputedStyle(R);function k(c){var i=s?P.indexOf(c):-1,v=i==-1?"":s.getPropertyValue("--jm-chart-"+(i+1)).trim();return v||c}function m(v){return Array.isArray(v)?v.map(k):k(v)}D.forEach(function(d,i){d.backgroundColor=m(O[i][0]);if(O[i][1]!==void 0)d.borderColor=m(O[i][1])})}function b(p){var s=p?null:getComputedStyle(R);function g(w,z){return(s?s.getPropertyValue(w).trim():"")||z}L.color=g("--jm-muted",Z[0]);L.borderColor=g("--jm-border",Z[1])}function u(p){a(ch.data.datasets,p);b(p);if(S===void 0)delete q.scales;else q.scales=JSON.parse(S);ch.update("jimemo")}a(cfg.data.datasets,!1);var q=cfg.options=cfg.options||{},t=q.transitions=q.transitions||{};S=JSON.stringify(q.scales);b(!1);t.jimemo={animation:{duration:0}};ch=new Chart(el,cfg);var f=el.nextElementSibling;if(f&&f.classList.contains("jm-chart-data"))f.open=!1;matchMedia("(prefers-color-scheme: dark)").addEventListener("change",function(){u(!1)});new MutationObserver(function(){u(!1)}).observe(R,{attributes:!0,attributeFilter:["data-theme"]});addEventListener("beforeprint",function(){u(!0)});addEventListener("afterprint",function(){u(!1)})})(document.getElementById("revenue-by-tier"), {"type":"bar","data":{"labels":["Starter","Growth","Scale","Enterprise"],"datasets":[{"label":"MRR ($k)","data":[18,34,27,21],"backgroundColor":"#2a78d6","borderColor":"#2a78d6"}]},"options":{}});</script>
 </section>
 
 
