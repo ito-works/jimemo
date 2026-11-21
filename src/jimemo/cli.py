@@ -294,7 +294,49 @@ def cmd_doctor(args) -> int:
             "Chrome/Chromium or set [pdf] browser in ~/.jimemo/config.toml)"
         )
 
+    _doctor_publish_assets()
+
     return 0 if ok else 1
+
+
+def _doctor_publish_assets() -> None:
+    """Warn when the tombstone middleware or _headers installed in the
+    cloudflare backend's state directory differ from the bundled copy
+    (jimemo#1cym): after a `git pull` that changes them, the Pages project
+    keeps the old ones until `jimemo publish setup --assets-only`.
+
+    Prints nothing unless the configured backend is cloudflare and its
+    state directory exists. A warning, never a failure: it does not touch
+    doctor's exit status. A config error prints nothing here; the pdf
+    section above already reports it. Local files only, so the line says
+    "installed", not "deployed".
+    """
+    from .config import config_path, load_config
+    from .errors import ConfigError
+    from .publish import cloudflare_backend
+
+    try:
+        path = config_path()
+        if not path.is_file():
+            return
+        cfg = load_config(path)
+    except (ConfigError, OSError):
+        return
+    publish = cfg.publish
+    if publish is None or publish.backend != "cloudflare" or publish.cloudflare is None:
+        return
+    state_dir = cloudflare_backend._default_state_dir(publish.cloudflare.project)
+    if not state_dir.is_dir():
+        return
+    problems = cloudflare_backend.installed_asset_drift(state_dir)
+    if not problems:
+        print(f"ok   publish assets installed in {state_dir} match the bundled copy")
+        return
+    for problem in problems:
+        print(
+            f"WARNING publish: installed {problem} in {state_dir}; "
+            "run `jimemo publish setup --assets-only` to refresh it"
+        )
 
 
 def cmd_list(args) -> int:

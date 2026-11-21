@@ -111,13 +111,71 @@ def _install_state_dir_assets(state_dir: Union[str, Path]) -> None:
     """
     state_dir = Path(state_dir)
     state_dir.mkdir(parents=True, exist_ok=True)
-    functions_dir = state_dir / "functions"
-    functions_dir.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(
-        CLOUDFLARE_ASSETS_DIR / "_middleware.js", functions_dir / "_middleware.js"
-    )
-    shutil.copyfile(CLOUDFLARE_ASSETS_DIR / "_headers", state_dir / "_headers")
-    shutil.copyfile(CLOUDFLARE_ASSETS_DIR / "index.html", state_dir / "index.html")
+    for source, dest in _state_dir_asset_sources():
+        target = state_dir / dest
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, target)
+
+
+#: (bundled file name in CLOUDFLARE_ASSETS_DIR, path under the state dir)
+#: for every asset _install_state_dir_assets installs. The installer and
+#: installed_asset_drift both read this table, so `jimemo doctor` compares
+#: against exactly the bytes setup would install (jimemo#1cym).
+_STATE_DIR_ASSETS = (
+    ("_middleware.js", "functions/_middleware.js"),
+    ("_headers", "_headers"),
+    ("index.html", "index.html"),
+)
+
+#: The assets installed_asset_drift compares. index.html is left out: it
+#: is a landing page a friend may customize, and a stale copy changes
+#: nothing about tombstones or headers.
+_DRIFT_CHECKED_ASSETS = ("functions/_middleware.js", "_headers")
+
+
+def _state_dir_asset_sources():
+    """``[(source path, dest relpath)]``, resolved against the current
+    CLOUDFLARE_ASSETS_DIR at call time."""
+    return [(CLOUDFLARE_ASSETS_DIR / name, dest) for name, dest in _STATE_DIR_ASSETS]
+
+
+def installed_asset_drift(state_dir: Union[str, Path]) -> List[str]:
+    """Problems with the middleware and _headers installed in
+    ``state_dir``, compared by sha256 with what _install_state_dir_assets
+    would install today. One string per problem file: ``"<relpath>
+    differs from the bundled copy"``, ``"<relpath> is missing"`` or
+    ``"<relpath> is unreadable (<error>)"``. Empty when both match.
+
+    Local only: no network and no Wrangler call. It says what is
+    installed in the state directory deploys come from, not what
+    Cloudflare is serving.
+    """
+    import hashlib
+
+    state_dir = Path(state_dir)
+    problems: List[str] = []
+    for source, dest in _state_dir_asset_sources():
+        if dest not in _DRIFT_CHECKED_ASSETS:
+            continue
+        installed = state_dir / dest
+        try:
+            installed_bytes = installed.read_bytes()
+        except FileNotFoundError:
+            problems.append(f"{dest} is missing")
+            continue
+        except OSError as e:
+            problems.append(f"{dest} is unreadable ({e.strerror or e})")
+            continue
+        try:
+            bundled_bytes = source.read_bytes()
+        except OSError as e:
+            problems.append(
+                f"{dest}: the bundled copy {source} is unreadable ({e.strerror or e})"
+            )
+            continue
+        if hashlib.sha256(installed_bytes).digest() != hashlib.sha256(bundled_bytes).digest():
+            problems.append(f"{dest} differs from the bundled copy")
+    return problems
 
 
 def _ensure_state_dir_assets(state_dir: Union[str, Path]) -> None:
