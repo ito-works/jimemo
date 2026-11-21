@@ -169,6 +169,16 @@ pushes only if the tests pass. If they fail, the kata issue comes back to you
 with a scrubbed failure comment; fix it, push again, and re-run
 `repoman-submit` — re-submission is the retry.
 
+A change to this repo is filed as a jimemo issue before work starts, even
+when it comes from an issue in another kata project. The handoff and the
+pull request name the jimemo issue; the other project's issue is linked as
+related in kata and is not named in the pull request body. The
+review-evidence check accepts only the projects in the repository variable
+`KATA_PROJECTS`, which is `jimemo` alone, and refuses any other with
+`kata project 'jibot-code' is not in KATA_PROJECTS (jimemo)` (the project
+name varies). Twice a jibot-code fix met that refusal and re-landed under a
+second issue (jimemo#hsqz, jimemo#68cj).
+
 `repoman-submit` lives in the cell-fleet repo at
 `ops/repoman/bin/repoman-submit`. The marker file is the check: if
 `.repoman-managed` is not present at a repo's root, that repo is unmanaged and
