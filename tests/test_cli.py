@@ -992,6 +992,50 @@ def test_render_without_pdf_never_touches_the_browser_seam(tmp_path, monkeypatch
     assert out.is_file()
 
 
+def _fake_webbrowser(monkeypatch):
+    """Record webbrowser.open calls instead of launching a browser."""
+    opened = []
+    monkeypatch.setattr("jimemo.cli.webbrowser.open", lambda url, *a, **kw: opened.append(url))
+    return opened
+
+
+def test_render_open_opens_html_when_no_pdf(tmp_path, monkeypatch):
+    monkeypatch.setenv("JIMEMO_CONFIG", str(tmp_path / "absent.toml"))
+    opened = _fake_webbrowser(monkeypatch)
+    out = tmp_path / "brief.html"
+
+    assert main([
+        "render", "briefing", str(BRIEFING_SAMPLE), "-o", str(out), "--open",
+    ]) == 0
+
+    assert opened == [out.resolve().as_uri()]
+
+
+def test_render_open_opens_pdf_when_pdf_flag_given(tmp_path, monkeypatch):
+    monkeypatch.setenv("JIMEMO_CONFIG", str(tmp_path / "absent.toml"))
+    _fake_pdf_seam(monkeypatch)
+    opened = _fake_webbrowser(monkeypatch)
+    out = tmp_path / "brief.html"
+
+    assert main([
+        "render", "briefing", str(BRIEFING_SAMPLE), "-o", str(out), "--pdf", "--open",
+    ]) == 0
+
+    assert opened == [(tmp_path / "brief.pdf").resolve().as_uri()]
+
+
+def test_chartjs_version_missing_file(tmp_path):
+    assert cli._chartjs_version(tmp_path) == "unknown"
+
+
+def test_chartjs_version_no_version_match(tmp_path):
+    bundle = tmp_path / "chartjs" / "chart.umd.min.js"
+    bundle.parent.mkdir()
+    bundle.write_text("/*! a bundle with no version banner */ var x = 1;")
+
+    assert cli._chartjs_version(tmp_path) == "unknown"
+
+
 def test_render_pdf_flag_value_must_end_in_dot_pdf(tmp_path, monkeypatch, capsys):
     """argparse's nargs='?' --pdf silently swallows the next positional
     as its value when --pdf appears before the positionals: `jimemo
