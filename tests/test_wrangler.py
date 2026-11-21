@@ -398,6 +398,27 @@ def test_env_prefix_reaches_a_real_executable(tmp_path, monkeypatch):
                                          "SOME_UNRELATED_VAR": "keep-me"}
 
 
+def test_env_could_not_run_accepts_gnu_envs_second_hint_line():
+    # GNU env, on a name it reads as a possible shebang mistake, follows
+    # its "No such file" line with a hint line of its own (seen on
+    # ubuntu-latest for a path under a pytest tmp directory).
+    from jimemo.publish.wrangler import _env_could_not_run
+    from subprocess import CompletedProcess
+
+    exe = "/tmp/pytest-of-runner/pytest-0/t0/no-such-wrangler"
+    two = CompletedProcess(
+        [], 127, "",
+        f"env: \u2018{exe}\u2019: No such file or directory\n"
+        "env: use -[v]S to pass options in shebang lines\n")
+    assert _env_could_not_run(two, exe)
+    # A line that is not env's own means something else spoke: not ours.
+    mixed = CompletedProcess(
+        [], 127, "",
+        f"env: \u2018{exe}\u2019: No such file or directory\n"
+        "wrangler: command failed\n")
+    assert not _env_could_not_run(mixed, exe)
+
+
 def test_missing_real_executable_through_env_is_the_missing_wrangler_error(
         tmp_path):
     w = Wrangler(executable=str(tmp_path / "no-such-wrangler"),

@@ -177,18 +177,21 @@ def _env_could_not_run(result: CompletedProcess, executable: str) -> bool:
     """True when /usr/bin/env, not wrangler, failed: it could not find
     (127) or execute (126) ``executable``.
 
-    How the two are told apart: env then prints exactly one line, to
-    stderr, that starts with its own name and names the executable
+    How the two are told apart: env then writes only to stderr, every
+    line starts with its own name, and the first names the executable
     (``env: wrangler: No such file or directory`` on macOS,
-    ``/usr/bin/env: 'wrangler': No such file or directory`` on GNU), and
-    nothing on stdout. Wrangler exiting 126 or 127 itself prints its own
-    error text, which does not start with ``env:``, so it keeps the
-    ordinary failure handling with its output included."""
+    ``/usr/bin/env: 'wrangler': No such file or directory`` on GNU).
+    GNU env may add a second line of its own, ``env: use -[v]S to pass
+    options in shebang lines``, when the name has a character it reads
+    as a possible shebang mistake. Wrangler exiting 126 or 127 itself
+    prints its own error text, which does not start with ``env:``, so
+    it keeps the ordinary failure handling with its output included."""
     if result.returncode not in (126, 127) or (result.stdout or "").strip():
         return False
     lines = (result.stderr or "").strip().splitlines()
-    return (len(lines) == 1
-            and lines[0].startswith(("env:", _ENV + ":"))
+    own = ("env:", _ENV + ":")
+    return (bool(lines)
+            and all(line.startswith(own) for line in lines)
             and executable in lines[0])
 
 
