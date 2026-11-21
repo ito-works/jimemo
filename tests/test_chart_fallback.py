@@ -228,7 +228,8 @@ process.stdin.on("end", () => {
   global.addEventListener = () => {};
   global.Chart = noChart ? undefined
     : function () { if (chartThrows) throw new Error("boom"); this.update = () => {}; };
-  if (global.Chart) global.Chart.defaults = {color: "#666", borderColor: "rgba(0,0,0,0.1)"};
+  if (global.Chart) global.Chart.defaults = {color: "#666", borderColor: "rgba(0,0,0,0.1)",
+                                         scale: {ticks: {backdropColor: "rgba(255, 255, 255, 0.75)"}}};
   let threw = false;
   try { eval(body); } catch (e) { threw = true; }
   console.log(JSON.stringify({threw, hidden: canvas.hidden,

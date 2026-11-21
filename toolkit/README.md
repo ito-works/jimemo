@@ -107,7 +107,9 @@ caller passes through a custom `palette=` are left as built, unless one
 equals a `DEFAULT_PALETTE` value. Axis, legend and grid colors follow the
 theme the same way: the init script sets Chart.js's page-wide
 `Chart.defaults.color` from `--jm-muted` and `Chart.defaults.borderColor`
-from `--jm-border` and repaints them with the series (a chart's own
+from `--jm-border`, and a radar's tick-label backdrop
+(`Chart.defaults.scale.ticks.backdropColor`, a translucent white by
+default) from `--jm-surface`, and repaints them with the series (a chart's own
 top-level `color` reaches only its legend in Chart.js 4.5.1, and its
 `borderColor` would also recolor doughnut slice borders). A color a caller
 sets in a chart's own options still wins; print and an empty token use

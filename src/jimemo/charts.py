@@ -332,12 +332,18 @@ _RUNTIME_HEAD_JS_7N1F = (
 # builds a chart, so before the repaint u() puts back the caller's own
 # scales (S, a JSON copy taken before construction; deleted when the
 # caller set none) and the update merges the new defaults in again.
+# A radar's radialLinear scale draws its tick labels over a backdrop
+# whose color comes from Chart.defaults.scale.ticks.backdropColor (T),
+# a translucent white; --jm-muted text on it would be lower contrast
+# than the library's #666, so b() sets it from --jm-surface the same
+# way, and a caller's own ticks.backdropColor still wins.
 _THEME_RUNTIME_HEAD_JS = (
     "var P=" + json.dumps(list(DEFAULT_PALETTE), separators=(",", ":")) + ","
     "R=document.documentElement,"
     "O=cfg.data.datasets.map(function(d){return[d.backgroundColor,d.borderColor]}),"
     "L=Chart.defaults,"
-    "Z=Chart.jimemo=Chart.jimemo||[L.color,L.borderColor],"
+    "T=L.scale.ticks,"
+    "Z=Chart.jimemo=Chart.jimemo||[L.color,L.borderColor,T.backdropColor],"
     "ch,S;"
     "function a(D,p){"
     "var s=p?null:getComputedStyle(R);"
@@ -353,7 +359,8 @@ _THEME_RUNTIME_HEAD_JS = (
     "var s=p?null:getComputedStyle(R);"
     "function g(w,z){return(s?s.getPropertyValue(w).trim():\"\")||z}"
     "L.color=g(\"--jm-muted\",Z[0]);"
-    "L.borderColor=g(\"--jm-border\",Z[1])}"
+    "L.borderColor=g(\"--jm-border\",Z[1]);"
+    "T.backdropColor=g(\"--jm-surface\",Z[2])}"
     "function u(p){"
     "a(ch.data.datasets,p);b(p);"
     "if(S===void 0)delete q.scales;else q.scales=JSON.parse(S);"
