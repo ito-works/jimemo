@@ -55,6 +55,16 @@ CLI_TARGET="$HOME/.local/bin/jimemo"
 CLAUDE_TARGET="$HOME/.claude/skills/jimemo"
 CODEX_TARGET="$HOME/.codex/skills/jimemo"
 
+# Codex is detected the way Amplifier is (jimemo#stsw): its home dir
+# exists, or the `codex` command is on PATH. Without either, linking the
+# skill would create ~/.codex on a machine that has no Codex.
+CODEX_DETECTED=0
+if [ -d "$HOME/.codex" ]; then
+    CODEX_DETECTED=1
+elif command -v codex >/dev/null 2>&1; then
+    CODEX_DETECTED=1
+fi
+
 # Amplifier has no config-file registration step for personal skills: its
 # tool-skills module discovers any directory containing a SKILL.md under
 # $AMPLIFIER_SKILLS_DIR (if set) or ~/.amplifier/skills, symlinks
@@ -104,7 +114,8 @@ Usage: install.sh [--dry-run] [--uninstall] [--python PATH] [--help]
 
 Installs the jimemo CLI as ~/.local/bin/jimemo and registers the jimemo
 skill with every agent harness that reads a filesystem skills dir (Claude
-Code -- and pi, which reads the same dir; Codex; Amplifier if present).
+Code -- and pi, which reads the same dir; Codex if present; Amplifier if
+present).
 Claude Desktop / Cowork loads skills app-side, not from disk, so it gets
 the CLI only (which works in its local-agent mode). One clone; `git pull`
 updates every harness.
@@ -692,7 +703,14 @@ remove_entry_point() {
 install_all() {
     write_entry_point "$CLI_TARGET"
     link_one "$CLAUDE_TARGET" "$SKILL_SOURCE" "Claude Code skill (also read by pi)"
-    link_one "$CODEX_TARGET" "$SKILL_SOURCE" "Codex skill"
+
+    if [ "$CODEX_DETECTED" = "1" ]; then
+        link_one "$CODEX_TARGET" "$SKILL_SOURCE" "Codex skill"
+    else
+        note "Codex not detected (no ~/.codex, no codex on PATH)." \
+            "To register manually once it's installed: ln -s $SKILL_SOURCE ~/.codex/skills/jimemo" \
+            "-- or just re-run this installer."
+    fi
 
     if [ "$AMPLIFIER_DETECTED" = "1" ]; then
         link_one "$AMPLIFIER_TARGET" "$SKILL_SOURCE" "Amplifier skill"

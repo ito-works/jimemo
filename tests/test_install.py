@@ -10,12 +10,15 @@ too: the proof that the binding works is `jimemo --version` succeeding
 under a PATH whose python3 would refuse.
 """
 
+import atexit
+import functools
 import os
 import re
 import shutil
 import stat
 import subprocess
 import sys
+import tempfile
 import venv
 from pathlib import Path
 
@@ -52,12 +55,48 @@ _KEEP = object()
 INSTALLER_ENV_VARS = ("JIMEMO_PYTHON", "JIMEMO_ENTRY_POINT", "AMPLIFIER_SKILLS_DIR")
 
 
+@functools.cache
+def _shadow_without_codex(directory: str) -> str:
+    """A temp dir of symlinks to everything in DIRECTORY except `codex`."""
+    shadow = tempfile.mkdtemp(prefix="jimemo-test-path-")
+    atexit.register(shutil.rmtree, shadow, True)
+    for name in os.listdir(directory):
+        if name != "codex":
+            os.symlink(os.path.join(directory, name), os.path.join(shadow, name))
+    return shadow
+
+
+def _path_without_codex(path: str) -> str:
+    """PATH with `codex` hidden and everything else still reachable.
+
+    install.sh links the Codex skill only when Codex is present (~/.codex,
+    or `codex` on PATH; jimemo#stsw). A developer Mac with Codex installed
+    would otherwise make every test's outcome depend on that machine, so
+    the default test environment has no Codex, and a test that wants it
+    creates ~/.codex in its temp HOME or puts a fake `codex` on PATH. A
+    directory holding `codex` is swapped for a shadow of it rather than
+    dropped: Homebrew's bin holds python3 as well.
+    """
+    dirs = []
+    for d in path.split(os.pathsep):
+        if d and os.access(os.path.join(d, "codex"), os.X_OK):
+            d = _shadow_without_codex(d)
+        dirs.append(d)
+    return os.pathsep.join(dirs)
+
+
 def _base_env(home: Path):
     env = dict(os.environ)
     env["HOME"] = str(home)
+    env["PATH"] = _path_without_codex(env.get("PATH", ""))
     for name in INSTALLER_ENV_VARS:
         env.pop(name, None)
     return env
+
+
+def with_codex(home: Path):
+    """Make Codex present in a temp HOME the way a real install leaves it."""
+    (home / ".codex").mkdir(exist_ok=True)
 
 
 def run_install(args, home: Path, extra_env=None, script=INSTALL_SH):
@@ -205,6 +244,7 @@ def faking_shim(version, releaselevel="final", serial=0):
 
 
 def test_dry_run_prints_planned_actions_and_creates_nothing(tmp_path):
+    with_codex(tmp_path)
     result = run_install(["--dry-run"], tmp_path)
 
     assert result.returncode == 0, result.stderr
@@ -218,10 +258,11 @@ def test_dry_run_prints_planned_actions_and_creates_nothing(tmp_path):
     # Nothing was actually created.
     assert not (tmp_path / ".local").exists()
     assert not (tmp_path / ".claude").exists()
-    assert not (tmp_path / ".codex").exists()
+    assert not (tmp_path / ".codex" / "skills").exists()
 
 
 def test_real_run_writes_the_entry_point_and_skill_symlinks(tmp_path):
+    with_codex(tmp_path)
     result = run_install([], tmp_path)
 
     assert result.returncode == 0, result.stderr
@@ -266,7 +307,87 @@ def test_real_run_notes_amplifier_when_not_detected(tmp_path):
     assert not (tmp_path / ".amplifier").exists()
 
 
+def test_real_run_skips_codex_when_not_detected(tmp_path):
+    # No ~/.codex and no `codex` on PATH (_base_env strips it): the
+    # installer must not create ~/.codex, and says how to register later.
+    result = run_install([], tmp_path)
+
+    assert result.returncode == 0, result.stderr
+    assert "Codex not detected" in result.stdout
+    assert not (tmp_path / ".codex").exists()
+    assert_symlink_to(claude_target(tmp_path), REPO_ROOT / "skill")
+
+
+def test_dry_run_skips_codex_when_not_detected(tmp_path):
+    result = run_install(["--dry-run"], tmp_path)
+
+    assert result.returncode == 0, result.stderr
+    assert "Codex not detected" in result.stdout
+    assert str(codex_target(tmp_path)) not in result.stdout
+    assert not (tmp_path / ".codex").exists()
+
+
+def test_real_run_registers_codex_when_dot_codex_exists(tmp_path):
+    with_codex(tmp_path)
+
+    result = run_install([], tmp_path)
+
+    assert result.returncode == 0, result.stderr
+    assert "Codex not detected" not in result.stdout
+    assert_symlink_to(codex_target(tmp_path), REPO_ROOT / "skill")
+
+
+def test_real_run_registers_codex_when_codex_is_on_path(tmp_path):
+    fake = tmp_path / "fakebin"
+    fake.mkdir()
+    codex = fake / "codex"
+    codex.write_text("#!/bin/sh\nexit 0\n")
+    codex.chmod(0o755)
+    home = tmp_path / "home"
+    home.mkdir()
+    path = f"{fake}{os.pathsep}{_base_env(home)['PATH']}"
+
+    result = run_install([], home, extra_env={"PATH": path})
+
+    assert result.returncode == 0, result.stderr
+    assert_symlink_to(codex_target(home), REPO_ROOT / "skill")
+
+
+def test_uninstall_removes_the_codex_link_found_through_path(tmp_path):
+    # Installed while `codex` was on PATH; uninstalled after it is gone.
+    # Uninstall never consults detection: the link is ours, so it goes.
+    fake = tmp_path / "fakebin"
+    fake.mkdir()
+    codex = fake / "codex"
+    codex.write_text("#!/bin/sh\nexit 0\n")
+    codex.chmod(0o755)
+    home = tmp_path / "home"
+    home.mkdir()
+    path = f"{fake}{os.pathsep}{_base_env(home)['PATH']}"
+    run_install([], home, extra_env={"PATH": path})
+    assert_symlink_to(codex_target(home), REPO_ROOT / "skill")
+
+    result = run_install(["--uninstall"], home)
+
+    assert result.returncode == 0, result.stderr
+    assert not codex_target(home).is_symlink()
+    assert not codex_target(home).exists()
+
+
+def test_uninstall_removes_the_codex_link(tmp_path):
+    with_codex(tmp_path)
+    run_install([], tmp_path)
+    assert_symlink_to(codex_target(tmp_path), REPO_ROOT / "skill")
+
+    result = run_install(["--uninstall"], tmp_path)
+
+    assert result.returncode == 0, result.stderr
+    assert not codex_target(tmp_path).is_symlink()
+    assert not codex_target(tmp_path).exists()
+
+
 def test_running_twice_is_idempotent(tmp_path):
+    with_codex(tmp_path)
     first = run_install([], tmp_path)
     second = run_install([], tmp_path)
 
@@ -279,6 +400,7 @@ def test_running_twice_is_idempotent(tmp_path):
 
 
 def test_uninstall_removes_exactly_what_it_wrote(tmp_path):
+    with_codex(tmp_path)
     run_install([], tmp_path)
     # An unrelated file that must survive uninstall untouched.
     sentinel = tmp_path / ".claude" / "skills" / "other-skill"
@@ -297,6 +419,7 @@ def test_uninstall_removes_exactly_what_it_wrote(tmp_path):
 
 
 def test_uninstall_dry_run_removes_nothing(tmp_path):
+    with_codex(tmp_path)
     run_install([], tmp_path)
 
     result = run_install(["--uninstall", "--dry-run"], tmp_path)
@@ -315,6 +438,7 @@ def test_uninstall_on_empty_home_is_a_harmless_noop(tmp_path):
 
 
 def test_pre_existing_non_symlink_is_warned_and_skipped(tmp_path):
+    with_codex(tmp_path)
     real_dir = claude_target(tmp_path)
     real_dir.mkdir(parents=True)
     (real_dir / "README.txt").write_text("not jimemo's\n")
@@ -432,7 +556,7 @@ def test_install_leaves_a_foreign_regular_file_at_the_cli_target(tmp_path):
     assert "leaving it alone" in result.stderr
     assert foreign.read_text() == "#!/bin/sh\necho somebody else's jimemo\n"
     # The skills were still linked.
-    assert_symlink_to(codex_target(tmp_path), REPO_ROOT / "skill")
+    assert_symlink_to(claude_target(tmp_path), REPO_ROOT / "skill")
 
 
 BINARY_WITH_MARKER_TEXT = (
