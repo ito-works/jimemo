@@ -173,3 +173,16 @@ with a scrubbed failure comment; fix it, push again, and re-run
 `ops/repoman/bin/repoman-submit`. The marker file is the check: if
 `.repoman-managed` is not present at a repo's root, that repo is unmanaged and
 normal merging applies.
+
+## Releasing: version, changelog, tag
+
+`CHANGELOG.md` at the root says what each version changed for someone who
+runs `git pull`. Between releases, add a line under `## Unreleased` when a
+change alters what a user sees or must do. A commit that changes
+`__version__` in `src/jimemo/__init__.py` moves those lines into a new
+`## X.Y.Z - YYYY-MM-DD` section in the same commit;
+`tests/test_version.py` fails when the newest released heading differs
+from `__version__`. Once that commit lands on `main`, it gets an annotated
+tag: `git tag -a vX.Y.Z -m "jimemo X.Y.Z" <landed-sha>`. Branches do not
+create or push tags; whoever tags landed commits does that after repoman
+lands them. There is no rule yet for when to bump.
