@@ -1601,3 +1601,63 @@ def test_doctor_asset_check_uses_the_installers_source(tmp_path, monkeypatch, ca
     out = capsys.readouterr().out
     assert "WARNING publish" not in out
     assert "ok   publish assets installed in" in out
+
+
+def test_doctor_reports_an_inaccessible_state_directory(tmp_path, monkeypatch, capsys):
+    """An ancestor without search permission makes Path.is_dir() raise
+    PermissionError on Python 3.13; doctor warns instead of a traceback."""
+    from pathlib import Path
+
+    state_dir, _ = _cloudflare_config(tmp_path, monkeypatch)
+    real_is_dir = Path.is_dir
+
+    def is_dir(self, *a, **kw):
+        if self == state_dir:
+            raise PermissionError(13, "Permission denied", str(self))
+        return real_is_dir(self, *a, **kw)
+
+    monkeypatch.setattr(Path, "is_dir", is_dir)
+    assert main(["doctor"]) == 0
+    out = capsys.readouterr().out
+    warnings = [line for line in out.splitlines() if line.startswith("WARNING publish")]
+    assert len(warnings) == 1
+    assert str(state_dir) in warnings[0]
+    assert "unreadable" in warnings[0]
+    assert "Permission denied" in warnings[0]
+
+
+@pytest.mark.parametrize("dest", ["_headers", "functions/_middleware.js"])
+@pytest.mark.parametrize("via_symlink", [False, True])
+def test_doctor_does_not_hang_on_a_fifo_asset(
+    tmp_path, monkeypatch, capsys, dest, via_symlink
+):
+    """A named pipe (or a symlink to one) with no writer would block
+    read_bytes() forever; doctor reports it as not a regular file."""
+    import os
+    import signal
+
+    state_dir, _ = _installed_state_dir(tmp_path, monkeypatch)
+    target = state_dir / dest
+    target.unlink()
+    if via_symlink:
+        fifo = tmp_path / "pipe"
+        os.mkfifo(fifo)
+        target.symlink_to(fifo)
+    else:
+        os.mkfifo(target)
+
+    def hung(signum, frame):
+        raise AssertionError("doctor blocked opening a FIFO")
+
+    previous = signal.signal(signal.SIGALRM, hung)
+    signal.alarm(5)
+    try:
+        assert main(["doctor"]) == 0
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, previous)
+    out = capsys.readouterr().out
+    warnings = [line for line in out.splitlines() if line.startswith("WARNING publish")]
+    assert len(warnings) == 1
+    assert dest in warnings[0]
+    assert "not a regular file" in warnings[0]

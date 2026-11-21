@@ -326,7 +326,14 @@ def _doctor_publish_assets() -> None:
     if publish is None or publish.backend != "cloudflare" or publish.cloudflare is None:
         return
     state_dir = cloudflare_backend._default_state_dir(publish.cloudflare.project)
-    if not state_dir.is_dir():
+    try:
+        if not state_dir.is_dir():
+            return
+    except OSError as e:
+        print(
+            f"WARNING publish: state directory {state_dir} is unreadable "
+            f"({e.strerror or e}); the installed publish assets were not checked"
+        )
         return
     problems = cloudflare_backend.installed_asset_drift(state_dir)
     if not problems:
