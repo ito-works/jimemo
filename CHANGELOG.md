@@ -50,9 +50,12 @@ prints the version you have; each released version is tagged `vX.Y.Z`.
 - An `<a id="...">` in markdown content keeps its `id`, so links to it
   from elsewhere in the page work.
 - Publishing with the `cloudflare` backend needs curl 8.3 or newer and the
-  API token in the environment for setup and every deploy, refuses to
-  deploy while the Pages project is fail-open, and keeps its state directory
-  in git.
+  API token in the environment for setup and every deploy, and refuses
+  to deploy while the Pages project is fail-open. If you publish from more
+  than one machine, make the backend's state directory a git repo with an
+  `origin` remote; without one, jimemo skips the sync, and a deploy from
+  the second machine removes the pages the first one published. Steps:
+  [docs/publish-setup.md](docs/publish-setup.md#the-wipe-by-deploy-hazard-and-the-git-fix-read-this).
 
 ## 0.0.2 - 2026-07-15
 
