@@ -963,23 +963,70 @@ def test_rgb_function_bg_is_measured_not_assumed_white():
     assert _contrast(pos, "#000000") >= 4.5
 
 
-def test_unmeasurable_brand_color_is_left_unmapped_with_a_note():
-    # a translucent color's contrast depends on what is under it: leave the
-    # AA-safe jimemo default rather than alias an unchecked color
-    export = _palette_export(**{"--x-green": "rgba(141, 177, 167, 0.5)"})
+# -- review round 2 (jimemo#jw31): every emitted badge color is checked ------
+
+
+def test_translucent_brand_color_on_black_is_composited_and_checked():
+    # the round 2 example: half-transparent sage on a black bg rendered the
+    # unchecked default #2f6b46 at ~3.3:1
+    export = _palette_export(bg_value="rgb(0,0,0)", **{"--x-green": "rgba(141, 177, 167, 0.5)"})
     css = build_theme(export, "translucent")
-    eff = _effective_root(css)
-    assert eff["--jm-positive"] == _light_root_block(_tokens_css())["--jm-positive"]
+    pos = _role(css, "--jm-positive")
+    assert _HEX6.match(pos), pos
+    assert _contrast(pos, "#000000") >= 4.5
     assert "var(--x-green)" not in css.split("mapped onto jimemo roles")[-1]
-    assert "--x-green" in css.split("*/")[0] and "contrast" in css.split("*/")[0]
 
 
-def test_unmeasurable_bg_leaves_positive_and_negative_unmapped():
+def test_unparseable_brand_color_falls_back_to_a_default_checked_against_the_bg():
+    export = _palette_export(bg_value="#000000", **{"--x-green": "oklch(70% 0.05 170)"})
+    css = build_theme(export, "oklchfg")
+    pos = _role(css, "--jm-positive")
+    assert _HEX6.match(pos), pos
+    assert _contrast(pos, "#000000") >= 4.5
+    header = css.split("*/")[0]
+    assert "--x-green" in header and "contrast" in header
+
+
+def test_unmatched_role_default_is_checked_against_a_dark_mapped_bg():
+    # no red token at all: the default --jm-negative must still pass on black
+    export = _palette_export(bg_value="#000000", **{"--x-green": "#1e5631"})
+    css = build_theme(export, "nored")
+    eff = _effective_root(css)
+    assert _contrast(eff["--jm-negative"], "#000000") >= 4.5
+    assert _contrast(eff["--jm-positive"], "#000000") >= 4.5
+
+
+def test_hsl_hue_units_are_parsed():
+    for hue in ("0turn", "0rad", "0grad", "0deg", "0"):
+        export = _palette_export(bg_value="hsl({} 0% 0%)".format(hue), **{"--x-green": "#1e5631"})
+        css = build_theme(export, "hue")
+        assert _effective_root(css)["--jm-bg"] == "var(--x-paper)", hue
+        assert _contrast(_role(css, "--jm-positive"), "#000000") >= 4.5, hue
+
+
+def test_translucent_bg_is_composited_over_the_light_canvas():
+    # rgba(0,0,0,0.5) over the white canvas renders mid grey #808080
     export = _palette_export(
         bg_value="rgba(0, 0, 0, 0.5)", **{"--x-green": "#1e5631", "--x-red": "#c31f1f"}
     )
     css = build_theme(export, "translucentbg")
+    eff = _effective_root(css)
+    assert eff["--jm-bg"] == "var(--x-paper)"
+    for role in ("--jm-positive", "--jm-negative"):
+        assert _contrast(eff[role], "#808080") >= 4.5, role
+
+
+def test_unmeasurable_bg_is_not_mapped_so_every_badge_color_is_checked():
+    # a bg the importer cannot measure leaves --jm-bg at the light default,
+    # the bg every badge color is then measured against
+    export = _palette_export(
+        bg_value="oklch(20% 0 0)", **{"--x-green": "#8DB1A7", "--x-red": "#EA8358"}
+    )
+    css = build_theme(export, "oklchbg")
     light = _light_root_block(_tokens_css())
     eff = _effective_root(css)
-    assert eff["--jm-positive"] == light["--jm-positive"]
-    assert eff["--jm-negative"] == light["--jm-negative"]
+    assert eff["--jm-bg"] == light["--jm-bg"]
+    for role in ("--jm-positive", "--jm-negative"):
+        assert _contrast(eff[role], light["--jm-bg"]) >= 4.5, role
+    header = css.split("*/")[0]
+    assert "--x-paper" in header and "--jm-bg" in header
