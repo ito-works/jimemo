@@ -81,8 +81,8 @@ untouched. `--dry-run` prints the plan without writing anything.
 |---|---|---|
 | **Claude Code** | skill at `~/.claude/skills/jimemo` | yes |
 | **pi** | reads `~/.claude/skills` (its `settings.json` `skills` paths), so it picks up the same skill | yes -- no separate step |
-| **Codex** | skill at `~/.codex/skills/jimemo` | yes |
-| **Amplifier** | skill at `~/.amplifier/skills/jimemo` | yes |
+| **Codex** | skill at `~/.codex/skills/jimemo` | yes, if present (`~/.codex` exists or `codex` is on `PATH`) |
+| **Amplifier** | skill at `~/.amplifier/skills/jimemo` | yes, if present (`$AMPLIFIER_SKILLS_DIR` is set or `~/.amplifier` exists) |
 | **Claude Desktop** (Cowork / local-agent mode) | **skill is not auto-loaded** -- its skills are app-managed, not read from `~/.claude/skills`. But local-agent mode runs shell commands, so the **`jimemo` CLI works** there directly. | CLI only |
 
 **Claude Desktop note:** because Cowork can't load a filesystem skill,
