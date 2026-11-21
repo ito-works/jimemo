@@ -139,6 +139,31 @@ def _state_dir_asset_sources():
     return [(CLOUDFLARE_ASSETS_DIR / name, dest) for name, dest in _STATE_DIR_ASSETS]
 
 
+def _read_regular_file(path: Path) -> bytes:
+    """The bytes of ``path``, refusing anything but a regular file.
+
+    Opened with O_NONBLOCK, so a named pipe (or a symlink to one) with no
+    writer cannot block the caller, then checked with fstat on the open
+    descriptor, so the type check and the read see the same file. A
+    non-regular file raises OSError ("not a regular file").
+    """
+    import errno
+    import os
+    import stat
+
+    fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise OSError(errno.EINVAL, "not a regular file", str(path))
+        os.set_blocking(fd, True)
+        with os.fdopen(fd, "rb") as f:
+            fd = -1
+            return f.read()
+    finally:
+        if fd != -1:
+            os.close(fd)
+
+
 def installed_asset_drift(state_dir: Union[str, Path]) -> List[str]:
     """Problems with the middleware and _headers installed in
     ``state_dir``, compared by sha256 with what _install_state_dir_assets
@@ -159,7 +184,7 @@ def installed_asset_drift(state_dir: Union[str, Path]) -> List[str]:
             continue
         installed = state_dir / dest
         try:
-            installed_bytes = installed.read_bytes()
+            installed_bytes = _read_regular_file(installed)
         except FileNotFoundError:
             problems.append(f"{dest} is missing")
             continue
