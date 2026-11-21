@@ -708,8 +708,7 @@ install_all() {
         link_one "$CODEX_TARGET" "$SKILL_SOURCE" "Codex skill"
     else
         note "Codex not detected (no ~/.codex, no codex on PATH)." \
-            "To register manually once it's installed: ln -s $SKILL_SOURCE ~/.codex/skills/jimemo" \
-            "-- or just re-run this installer."
+            "Once it's installed, re-run this installer to register the skill."
     fi
 
     if [ "$AMPLIFIER_DETECTED" = "1" ]; then
