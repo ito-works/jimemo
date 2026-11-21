@@ -43,12 +43,16 @@
    * small multiples, per the dataviz skill's non-negotiables). It is
    * deliberately brand-neutral rather than derived from --jm-accent:
    * chart series need an identity channel distinct from that
-   * editorial role. The chart library renders to a bitmap drawing
-   * surface it paints itself and cannot read custom properties from,
-   * so these tokens are CSS-only chrome/documentation — src/jimemo/
-   * charts.py DEFAULT_PALETTE is the source of truth for rendered
-   * chart colors and its light-mode values must match this block
-   * exactly (tests/test_charts.py checks the two stay in sync).
+   * editorial role. The chart library paints its own bitmap, which
+   * cannot read custom properties itself, so each chart's init script
+   * reads them at view time: it swaps the series colors src/jimemo/
+   * charts.py DEFAULT_PALETTE baked into the config for these
+   * --jm-chart-N values, sets the axis, legend and grid colors from
+   * --jm-muted and --jm-border and radar tick backdrops from
+   * --jm-surface, and repaints when the theme changes.
+   * DEFAULT_PALETTE is what print and an empty token fall back to,
+   * so its values must match this block's light-mode values exactly
+   * (tests/test_charts.py checks the two stay in sync).
    * Validated with dataviz/scripts/validate_palette.js against both
    * --jm-bg and --jm-surface (the drawing surface has no fill of its
    * own, so it shows whichever it's placed on), light and dark; see
