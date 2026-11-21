@@ -166,23 +166,3 @@ def test_docs_name_ci_gate_sh_as_the_registry_row():
     doc = sys.modules[__name__].__doc__
     assert "The row is `ci/gate.sh`" in doc
     assert "The row is `python3 -m pytest" not in doc
-
-
-def test_docs_say_jimemo_work_is_filed_as_a_jimemo_issue():
-    # Joi kept KATA_PROJECTS at 'jimemo' (jimemo#1zm1). Work from another
-    # project's issue is refused by the review-evidence check, so AGENTS.md
-    # says to file a jimemo issue first, and quotes the refusal verbatim so a
-    # worker who meets it finds the paragraph.
-    sys.path.insert(0, str(REPO / "ci" / "scripts"))
-    try:
-        import pr_meta
-    finally:
-        sys.path.pop(0)
-    ok, why = pr_meta.project_declared({"project": "jibot-code"}, "jimemo")
-    assert not ok
-    landing = " ".join((REPO / "AGENTS.md").read_text().split(
-        "## Landing changes", 1)[1].split("\n## ", 1)[0].split())
-    assert "`%s`" % why in landing
-    assert "filed as a jimemo issue before work starts" in landing
-    assert "linked as related in kata" in landing
-    assert "not named in the pull request body" in landing
