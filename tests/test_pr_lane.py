@@ -1,7 +1,8 @@
 """The PR-lane machinery under ci/ runs inside the registry gate (kata jibot-code#bden).
 
-The row is `python3 -m pytest tests -q` (gate.yml runs it as ci/gate.sh, which
-reports pytest's exit 2 as 1; kata jibot-code#qe35); these three tests are how
+The row is `ci/gate.sh` (jibot-code#gpt2), which runs
+`python3 -m pytest tests -q` and reports pytest's exit 2 as 1 (kata
+jibot-code#qe35); gate.yml runs the same script. These three tests are how
 that row also gates a change to a workflow or to ci/, on both lanes. Each one
 is the exact command jibot-ops's gate runs. The bridge suite is verbatim from
 jibot-ops 8f46f7e and needs nothing beyond the stdlib; the shell suite wants
@@ -149,3 +150,15 @@ def test_pytest_still_exits_2_on_a_collection_error(tmp_path):
          str(tmp_path)],
         cwd=tmp_path, capture_output=True, text=True, timeout=120)
     assert proc.returncode == 2, proc.stdout[-2000:]
+
+
+def test_docs_name_ci_gate_sh_as_the_registry_row():
+    # The repoman registry row for jimemo runs ci/gate.sh, not a bare pytest
+    # (jibot-code#gpt2, jimemo#h8rq). The docs that describe the row say so.
+    landing = (REPO / "AGENTS.md").read_text().split(
+        "## Landing changes", 1)[1]
+    assert "runs `ci/gate.sh`" in landing
+    assert "runs `python3 -m pytest" not in landing
+    doc = sys.modules[__name__].__doc__
+    assert "The row is `ci/gate.sh`" in doc
+    assert "The row is `python3 -m pytest" not in doc
