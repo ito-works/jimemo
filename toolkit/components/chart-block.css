@@ -3,7 +3,7 @@
  * default against this block's width) and CSS cannot style what it
  * paints, so only the title and spacing are styled here. The canvas
  * colors come from the chart's init script, which reads --jm-chart-N,
- * --jm-muted and --jm-border at view time and repaints on a theme
+ * --jm-muted, --jm-border and --jm-surface at view time and repaints on a theme
  * change (see tokens.css's chart-palette note). */
 
 .jm-chart-block {

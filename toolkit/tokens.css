@@ -39,7 +39,8 @@
    * reads them at view time: it swaps the series colors src/jimemo/
    * charts.py DEFAULT_PALETTE baked into the config for these
    * --jm-chart-N values, sets the axis, legend and grid colors from
-   * --jm-muted and --jm-border, and repaints when the theme changes.
+   * --jm-muted and --jm-border and radar tick backdrops from
+   * --jm-surface, and repaints when the theme changes.
    * DEFAULT_PALETTE is what print and an empty token fall back to,
    * so its values must match this block's light-mode values exactly
    * (tests/test_charts.py checks the two stay in sync).

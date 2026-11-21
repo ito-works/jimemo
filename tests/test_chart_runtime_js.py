@@ -33,9 +33,10 @@ DARK = ["#3987e5", "#199e70", "#c98500", "#008300",
         "#9085e9", "#e66767", "#d55181", "#d95926"]
 DARK_TOKENS = {f"--jm-chart-{i + 1}": c for i, c in enumerate(DARK)}
 LIGHT_TOKENS = {f"--jm-chart-{i + 1}": c for i, c in enumerate(DEFAULT_PALETTE)}
-# Chart chrome (jimemo#e2sb): text from --jm-muted, lines from --jm-border.
-DARK_CHROME = {"--jm-muted": "#a29b8d", "--jm-border": "#34383f"}
-LIGHT_CHROME = {"--jm-muted": "#6b6459", "--jm-border": "#e4e0d8"}
+# Chart chrome (jimemo#e2sb): text from --jm-muted, lines from --jm-border,
+# tick label backdrops (radar) from --jm-surface.
+DARK_CHROME = {"--jm-muted": "#a29b8d", "--jm-border": "#34383f", "--jm-surface": "#1e2126"}
+LIGHT_CHROME = {"--jm-muted": "#6b6459", "--jm-border": "#e4e0d8", "--jm-surface": "#ffffff"}
 
 # Reads {body, tokens, steps} on stdin. Steps: ["tokens", {...}],
 # ["mutate"] (data-theme changed), ["media"] (prefers-color-scheme
@@ -70,7 +71,9 @@ process.stdin.on("end", () => {
   global.addEventListener = (type, fn) => { on(type, fn); };
   const charts = [];
   const LIB = {color: "#666", borderColor: "rgba(0,0,0,0.1)"};
-  const chrome = () => ({color: Chart.defaults.color, borderColor: Chart.defaults.borderColor});
+  const LIB_BACKDROP = "rgba(255, 255, 255, 0.75)";
+  const chrome = () => ({color: Chart.defaults.color, borderColor: Chart.defaults.borderColor,
+                         backdrop: Chart.defaults.scale.ticks.backdropColor});
   const scales = o => o.scales === undefined ? null : JSON.parse(JSON.stringify(o.scales));
   global.Chart = function (el, cfg) {
     this.el = el;
@@ -101,7 +104,7 @@ process.stdin.on("end", () => {
     };
     charts.push(this);
   };
-  global.Chart.defaults = Object.assign({}, LIB);
+  global.Chart.defaults = Object.assign({scale: {ticks: {backdropColor: LIB_BACKDROP}}}, LIB);
   eval(body);
   const chart = charts[0];
   const colors = ds => ds.map(d => ({bg: d.backgroundColor, border: d.borderColor}));
@@ -213,11 +216,8 @@ def test_data_theme_change_repaints():
     assert out["snaps"] == [{
         "colors": [{"bg": DEFAULT_PALETTE[0], "border": DEFAULT_PALETTE[0]}],
         "updates": 1, "mode": "jimemo",
-        "chrome": {"color": "#666", "borderColor": "rgba(0,0,0,0.1)"},
-        "atUpdate": [{
-            "chrome": {"color": "#666", "borderColor": "rgba(0,0,0,0.1)"},
-            "scales": None,
-        }],
+        "chrome": LIB,
+        "atUpdate": [{"chrome": LIB, "scales": None}],
     }]
 
 
@@ -267,28 +267,31 @@ def test_print_uses_the_baked_light_palette_then_restores():
 # bakes them into cfg.options.scales at construction and at each update,
 # as Chart.js's mergeScaleConfig does.
 
-LIB = {"color": "#666", "borderColor": "rgba(0,0,0,0.1)"}
-DARK_LIB = {"color": "#a29b8d", "borderColor": "#34383f"}
-LIGHT_LIB = {"color": "#6b6459", "borderColor": "#e4e0d8"}
+LIB_BACKDROP = "rgba(255, 255, 255, 0.75)"
+LIB = {"color": "#666", "borderColor": "rgba(0,0,0,0.1)", "backdrop": LIB_BACKDROP}
+DARK_LIB = {"color": "#a29b8d", "borderColor": "#34383f", "backdrop": "#1e2126"}
+LIGHT_LIB = {"color": "#6b6459", "borderColor": "#e4e0d8", "backdrop": "#ffffff"}
 
 
 def test_first_draw_takes_chrome_colors_from_the_tokens():
     out = run(bar_config(1), {**DARK_TOKENS, **DARK_CHROME})
     assert out["firstChrome"] == [DARK_LIB]
     # The library's own values are kept for print and empty tokens.
-    assert out["jimemo"] == ["#666", "rgba(0,0,0,0.1)"]
+    assert out["jimemo"] == ["#666", "rgba(0,0,0,0.1)", LIB_BACKDROP]
     # Nothing is added to the chart's own options.
     assert out["options"] == {"transitions": {"jimemo": {"animation": {"duration": 0}}}}
 
 
 def test_chrome_tokens_are_trimmed():
-    out = run(bar_config(1), {"--jm-muted": " #a29b8d ", "--jm-border": "\t#34383f"})
+    out = run(bar_config(1), {"--jm-muted": " #a29b8d ", "--jm-border": "\t#34383f",
+                              "--jm-surface": "#1e2126\n"})
     assert out["firstChrome"] == [DARK_LIB]
 
 
 def test_empty_chrome_tokens_leave_the_library_defaults():
     out = run(bar_config(1), {**DARK_TOKENS, "--jm-muted": "#a29b8d"})
-    assert out["firstChrome"] == [{"color": "#a29b8d", "borderColor": "rgba(0,0,0,0.1)"}]
+    assert out["firstChrome"] == [{"color": "#a29b8d", "borderColor": "rgba(0,0,0,0.1)",
+                                   "backdrop": LIB_BACKDROP}]
 
 
 def test_explicit_caller_chrome_options_are_untouched():
@@ -342,9 +345,42 @@ def test_a_second_chart_does_not_take_the_tokens_for_the_library_values():
               [["beforeprint"], ["snap"]], extra=[pie_config()])
     assert out["charts"] == 2
     assert out["firstChrome"] == [DARK_LIB, DARK_LIB]
-    assert out["jimemo"] == ["#666", "rgba(0,0,0,0.1)"]
+    assert out["jimemo"] == ["#666", "rgba(0,0,0,0.1)", LIB_BACKDROP]
     # Both charts print with the library's values.
     assert out["snaps"][0]["atUpdate"] == [
         {"chrome": LIB, "scales": None},
         {"chrome": LIB, "scales": None},
     ]
+
+
+# A radar's radialLinear scale draws its tick labels over a backdrop
+# (ticks.showLabelBackdrop), whose color Chart.js 4.5.1 takes from
+# Chart.defaults.scale.ticks.backdropColor, rgba(255, 255, 255, 0.75).
+# Light --jm-muted text on that white box is lower contrast than the
+# library's #666 was, so the runtime themes the backdrop from --jm-surface.
+
+def radar_config():
+    decl = {"id": "c1", "type": "radar", "data_slot": "d"}
+    data = {"labels": ["a", "b", "c"], "series": [{"name": "s", "values": [1, 2, 3]}]}
+    return build_chart_config(decl, data)
+
+
+def test_radar_tick_backdrop_follows_the_surface_and_repaints():
+    out = run(radar_config(), {**DARK_TOKENS, **DARK_CHROME},
+              [["tokens", {**LIGHT_TOKENS, **LIGHT_CHROME}], ["mutate"], ["snap"],
+               ["beforeprint"], ["snap"]])
+    assert out["firstChrome"] == [DARK_LIB]
+    light, printed = out["snaps"]
+    assert light["atUpdate"][0]["chrome"] == LIGHT_LIB
+    assert printed["atUpdate"][0]["chrome"] == LIB
+    # No scale is added for it: the caller's config stays as built.
+    assert "scales" not in out["options"]
+
+
+def test_explicit_caller_backdrop_is_kept_through_a_repaint():
+    config = radar_config()
+    config["options"] = {"scales": {"r": {"ticks": {"backdropColor": "#123456"}}}}
+    out = run(config, {**DARK_TOKENS, **DARK_CHROME}, [["mutate"], ["snap"]])
+    assert out["options"]["scales"] == {"r": {"ticks": {"backdropColor": "#123456"}}}
+    assert out["snaps"][0]["atUpdate"][0]["scales"]["r"] == {
+        "ticks": {"backdropColor": "#123456"}}
