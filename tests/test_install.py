@@ -318,6 +318,23 @@ def test_real_run_skips_codex_when_not_detected(tmp_path):
     assert_symlink_to(claude_target(tmp_path), REPO_ROOT / "skill")
 
 
+def test_codex_note_gives_only_an_instruction_that_works(tmp_path):
+    # A bare `ln -s SRC ~/.codex/skills/jimemo` fails when Codex is on
+    # PATH but ~/.codex/skills does not exist yet, and an unquoted SRC
+    # breaks on a checkout path with spaces. The note names the one step
+    # that always works: re-run the installer, which detects Codex and
+    # creates the parent directory itself.
+    result = run_install([], tmp_path)
+
+    assert result.returncode == 0, result.stderr
+    codex_note = [
+        line for line in result.stdout.splitlines() if "Codex not detected" in line
+    ]
+    assert len(codex_note) == 1, result.stdout
+    assert "ln -s" not in codex_note[0]
+    assert "re-run this installer" in codex_note[0]
+
+
 def test_dry_run_skips_codex_when_not_detected(tmp_path):
     result = run_install(["--dry-run"], tmp_path)
 
