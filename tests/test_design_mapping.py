@@ -880,3 +880,106 @@ def test_header_documents_mappings():
     assert "Auto-mapped roles" in header
     assert "--nw-blue-core -> --jm-accent" in header
     assert "Review / refine" in header
+
+
+# -- review round 1 (jimemo#jw31): partial exports and non-hex colors -------
+
+
+def _tokens_css():
+    return (Path(__file__).resolve().parents[1] / "toolkit" / "tokens.css").read_text()
+
+
+def _dark_media_block(tokens_css):
+    m = re.search(
+        r"@media\s*\(prefers-color-scheme:\s*dark\)\s*\{\s*:root\s*\{([^}]*)\}", tokens_css
+    )
+    assert m, "toolkit/tokens.css has no prefers-color-scheme:dark :root block"
+    body = re.sub(r"/\*.*?\*/", "", m.group(1), flags=re.S)
+    return {d.split(":", 1)[0].strip() for d in body.split(";") if ":" in d}
+
+
+def _effective_root(css):
+    """Last declaration of each property in the theme's :root block --
+    what the cascade sees, since later wins at equal specificity."""
+    root = re.search(r":root\s*\{([^}]*)\}", re.sub(r"/\*.*?\*/", "", css, flags=re.S))
+    assert root
+    decls = {}
+    for decl in root.group(1).split(";"):
+        if ":" in decl:
+            name, value = decl.split(":", 1)
+            decls[name.strip()] = " ".join(value.split())
+    return decls
+
+
+def test_partial_export_pins_every_dark_block_property_to_light():
+    # a palette with only a green token: bg, text, surface ... are unmapped,
+    # and the theme must still override the dark block's value for each
+    # one, or an OS-dark visitor gets a dark page under light chrome
+    tokens_css = _tokens_css()
+    light = _light_root_block(tokens_css)
+    dark_props = _dark_media_block(tokens_css)
+    export = DesignExport(
+        tokens=[Token("--x-green", "#8DB1A7", "color")], fonts=[], brand_fonts=[], namespace="x"
+    )
+    css = build_theme(export, "partial")
+    eff = _effective_root(css)
+    assert eff["--jm-positive"] != light["--jm-positive"]  # mapped role kept
+    for prop in dark_props - {"--jm-positive"}:
+        assert eff.get(prop) == light[prop], prop
+    # and the pale green is measured against the bg that actually renders
+    assert _contrast(eff["--jm-positive"], light["--jm-bg"]) >= 4.5
+
+
+def test_mapped_roles_are_not_overridden_by_the_light_pin():
+    _, css = _theme()
+    eff = _effective_root(css)
+    assert eff["--jm-bg"] == "var(--nw-paper)"
+    assert eff["--jm-text"] == "var(--nw-ink)"
+
+
+def test_rgb_function_brand_color_is_measured_and_darkened():
+    export = _palette_export(**{"--x-green": "rgb(141, 177, 167)"})
+    css = build_theme(export, "rgbfg")
+    pos = _role(css, "--jm-positive")
+    assert _HEX6.match(pos), pos
+    assert _contrast(pos, "#ffffff") >= 4.5
+
+
+def test_hsl_function_brand_color_is_measured_and_darkened():
+    # hsl(18deg 78% 63%) is close to orange #EA8358 (~2.6:1 on white)
+    export = _palette_export(**{"--x-red": "hsl(18deg 78% 63%)"})
+    css = build_theme(export, "hslfg")
+    neg = _role(css, "--jm-negative")
+    assert _HEX6.match(neg), neg
+    assert _contrast(neg, "#ffffff") >= 4.5
+
+
+def test_rgb_function_bg_is_measured_not_assumed_white():
+    # dark green passes on white but not on the black bg that renders
+    export = _palette_export(bg_value="rgb(0,0,0)", **{"--x-green": "#1e5631"})
+    css = build_theme(export, "rgbbg")
+    pos = _role(css, "--jm-positive")
+    assert _HEX6.match(pos), pos
+    assert _contrast(pos, "#000000") >= 4.5
+
+
+def test_unmeasurable_brand_color_is_left_unmapped_with_a_note():
+    # a translucent color's contrast depends on what is under it: leave the
+    # AA-safe jimemo default rather than alias an unchecked color
+    export = _palette_export(**{"--x-green": "rgba(141, 177, 167, 0.5)"})
+    css = build_theme(export, "translucent")
+    eff = _effective_root(css)
+    assert eff["--jm-positive"] == _light_root_block(_tokens_css())["--jm-positive"]
+    assert "var(--x-green)" not in css.split("mapped onto jimemo roles")[-1]
+    assert "--x-green" in css.split("*/")[0] and "contrast" in css.split("*/")[0]
+
+
+def test_unmeasurable_bg_leaves_positive_and_negative_unmapped():
+    export = _palette_export(
+        bg_value="rgba(0, 0, 0, 0.5)", **{"--x-green": "#1e5631", "--x-red": "#c31f1f"}
+    )
+    css = build_theme(export, "translucentbg")
+    light = _light_root_block(_tokens_css())
+    eff = _effective_root(css)
+    assert eff["--jm-positive"] == light["--jm-positive"]
+    assert eff["--jm-negative"] == light["--jm-negative"]

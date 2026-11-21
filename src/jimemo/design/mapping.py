@@ -38,13 +38,14 @@ computed literals rather than source-token aliases:
     status-badge text and a pale brand green or red (sage #8DB1A7 is
     ~2.3:1 on white) fails WCAG AA. Each is the brand color darkened, hue
     kept, just far enough to reach 4.5:1 against the mapped --jm-bg
-    (white when unmapped); one that already passes is copied unchanged.
+    (jimemo's light --jm-bg when unmapped); one that already passes is
+    copied unchanged, and one that cannot be measured is not mapped.
     The cost, accepted by ruling on jimemo#jw31: editing the raw brand
     token after import no longer moves these two roles; re-run the import.
 
-The :root block also pins `color-scheme: light` and jimemo's light-mode
-shadows and chart palette (see _LIGHT_ONLY_DECLS), since an imported theme
-has no dark variant.
+The :root block also pins `color-scheme: light` and jimemo's light value
+for every other property tokens.css's dark block sets and the theme does
+not map (see _LIGHT_DEFAULTS), since an imported theme has no dark variant.
 """
 from __future__ import annotations
 
@@ -390,19 +391,63 @@ def _luminance(value: str, tokens_by_name: Dict[str, Token]) -> Optional[float]:
     return (0.299 * r + 0.587 * g + 0.114 * b) / 255
 
 
+_NUM = r"([+-]?(?:\d+\.?\d*|\.\d+))"
+# rgb()/hsl() in comma or space syntax, with an optional alpha that must be
+# fully opaque to measure: a translucent color's contrast depends on what
+# is painted under it.
+_RGB_FN_RE = re.compile(
+    r"^rgba?\(\s*{n}(%?)\s*[,\s]\s*{n}(%?)\s*[,\s]\s*{n}(%?)\s*"
+    r"(?:[,/]\s*{n}(%?)\s*)?\)$".format(n=_NUM),
+    re.IGNORECASE,
+)
+_HSL_FN_RE = re.compile(
+    r"^hsla?\(\s*{n}(deg)?\s*[,\s]\s*{n}%\s*[,\s]\s*{n}%\s*"
+    r"(?:[,/]\s*{n}(%?)\s*)?\)$".format(n=_NUM),
+    re.IGNORECASE,
+)
+
+
+def _opaque(alpha: Optional[str], pct: Optional[str]) -> bool:
+    if alpha is None:
+        return True
+    return float(alpha) >= (100 if pct else 1)
+
+
 def _rgb(value: str, tokens_by_name: Dict[str, Token]) -> Optional[Tuple[int, int, int]]:
-    """(r, g, b) in 0..255 for a (possibly var()-aliased) `#rgb`/`#rrggbb`
-    color, or None -- the parse `_luminance` and `_text_safe` share."""
+    """(r, g, b) in 0..255 for a (possibly var()-aliased) `#rgb`/`#rrggbb`,
+    or opaque `rgb()`/`hsl()`, color; None for anything else, a translucent
+    color included -- the parse `_luminance` and `_text_safe` share."""
     resolved = _resolve_color(value, tokens_by_name)
     if resolved is None:
         return None
     m = _HEX_RE.match(resolved)
-    if not m:
-        return None
-    h = m.group(1)
-    if len(h) == 3:
-        h = "".join(c * 2 for c in h)
-    return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    if m:
+        h = m.group(1)
+        if len(h) == 3:
+            h = "".join(c * 2 for c in h)
+        return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    m = _RGB_FN_RE.match(resolved)
+    if m:
+        if not _opaque(m.group(7), m.group(8)):
+            return None
+        chans = []
+        for i in (1, 3, 5):
+            v = float(m.group(i))
+            v = v * 255 / 100 if m.group(i + 1) else v
+            chans.append(round(min(255.0, max(0.0, v))))
+        return chans[0], chans[1], chans[2]
+    m = _HSL_FN_RE.match(resolved)
+    if m:
+        if not _opaque(m.group(5), m.group(6)):
+            return None
+        import colorsys
+
+        h = (float(m.group(1)) % 360) / 360
+        sat = min(100.0, max(0.0, float(m.group(3)))) / 100
+        light = min(100.0, max(0.0, float(m.group(4)))) / 100
+        r, g, b = colorsys.hls_to_rgb(h, light, sat)
+        return round(r * 255), round(g * 255), round(b * 255)
+    return None
 
 
 def _relative_luminance(rgb: Tuple[int, int, int]) -> float:
@@ -541,13 +586,18 @@ def _pick_greys(
     return border, muted
 
 
-def _color_mappings(export: DesignExport) -> "Dict[str, Tuple[Token, Optional[str]]]":
-    """jm role -> (source token, literal override or None to emit
-    var(--source)). Only roles with a confident source token are
-    present; callers must leave every other role at jimemo's default."""
+def _color_mappings(
+    export: DesignExport,
+) -> "Tuple[Dict[str, Tuple[Token, Optional[str]]], Dict[str, str]]":
+    """(mappings, skipped). mappings: jm role -> (source token, literal
+    override or None to emit var(--source)); only roles with a confident
+    source token are present, and callers must leave every other role at
+    jimemo's default. skipped: role -> review note, for a role that had a
+    source token but was left at the default on purpose."""
     tokens_by_name = {t.name: t for t in export.tokens}
     colors = _color_tokens(export)
     result: Dict[str, Tuple[Token, Optional[str]]] = {}
+    skipped: Dict[str, str] = {}
 
     text = _pick_by_keywords(colors, _TEXT_KEYWORDS)
     if text:
@@ -575,10 +625,15 @@ def _color_mappings(export: DesignExport) -> "Dict[str, Tuple[Token, Optional[st
         result["--jm-accent-contrast"] = (accent, contrast)
 
     # positive/negative are status-badge TEXT, so each becomes a computed
-    # literal that reaches AA contrast on the mapped bg (jimemo#jw31). A
-    # brand color that is not a plain hex cannot be measured and stays a
-    # var() alias.
-    bg_rgb = (_rgb(bg.value, tokens_by_name) if bg else None) or (255, 255, 255)
+    # literal that reaches AA contrast on the bg that renders (jimemo#jw31):
+    # the mapped --jm-bg, or the light default the theme pins when bg is
+    # unmapped. A color that cannot be measured (translucent, or a form
+    # _rgb does not parse), or an unmeasurable bg, leaves the role at
+    # jimemo's AA-safe default instead of aliasing an unchecked color.
+    if bg:
+        bg_rgb = _rgb(bg.value, tokens_by_name)
+    else:
+        bg_rgb = _rgb(_LIGHT_DEFAULTS["--jm-bg"], {})
     for role, keywords in (
         ("--jm-positive", _POSITIVE_KEYWORDS),
         ("--jm-negative", _NEGATIVE_KEYWORDS),
@@ -587,9 +642,18 @@ def _color_mappings(export: DesignExport) -> "Dict[str, Tuple[Token, Optional[st
         if not token:
             continue
         rgb = _rgb(token.value, tokens_by_name)
-        result[role] = (token, _text_safe(rgb, bg_rgb) if rgb else None)
+        if rgb is None or bg_rgb is None:
+            unmeasured = token.name if rgb is None else bg.name
+            skipped[role] = (
+                "{} matched {} but was left at jimemo's default: {} is not an "
+                "opaque hex/rgb()/hsl() color, so its text contrast cannot be "
+                "checked; set it manually to a color with at least 4.5:1 "
+                "contrast on --jm-bg.".format(role, token.name, unmeasured)
+            )
+            continue
+        result[role] = (token, _text_safe(rgb, bg_rgb))
 
-    return result
+    return result, skipped
 
 
 # ---------------------------------------------------------------------------
@@ -618,24 +682,35 @@ _ROLE_ORDER = (
 # follows toolkit/tokens.css's `@media (prefers-color-scheme: dark)` block
 # at equal specificity, so its own colors win by source order -- but any
 # property it does NOT redeclare keeps the dark block's value. These are
-# those properties, copied from tokens.css's light :root block (a test
-# pins the copy) so an OS-dark visitor gets a consistent light page rather
-# than light colors with dark UA chrome, shadows and chart palette
-# (jimemo#jw31). `:root[data-theme="dark"]` (render --theme dark) still
-# wins by specificity.
-_LIGHT_ONLY_DECLS = (
-    ("color-scheme", "light"),
-    ("--jm-shadow-sm", "0 1px 2px rgba(31, 27, 20, 0.05)"),
-    ("--jm-shadow-md", "0 1px 2px rgba(31, 27, 20, 0.05), 0 6px 18px rgba(31, 27, 20, 0.06)"),
-    ("--jm-chart-1", "#2a78d6"),
-    ("--jm-chart-2", "#1baf7a"),
-    ("--jm-chart-3", "#eda100"),
-    ("--jm-chart-4", "#008300"),
-    ("--jm-chart-5", "#4a3aa7"),
-    ("--jm-chart-6", "#e34948"),
-    ("--jm-chart-7", "#e87ba4"),
-    ("--jm-chart-8", "#eb6834"),
-)
+# every property that dark block sets, at the value tokens.css's light
+# :root block gives it (a test pins both the set and the values).
+# build_theme emits each one the theme has not mapped, so an OS-dark
+# visitor gets a consistent light page -- even from a partial export --
+# rather than light colors over dark UA chrome, shadows, chart palette or
+# unmapped roles (jimemo#jw31). `:root[data-theme="dark"]` (render --theme
+# dark) still wins by specificity.
+_LIGHT_DEFAULTS = {
+    "color-scheme": "light",
+    "--jm-bg": "#faf9f7",
+    "--jm-surface": "#ffffff",
+    "--jm-text": "#262521",
+    "--jm-muted": "#6b6459",
+    "--jm-accent": "#17597a",
+    "--jm-accent-contrast": "#ffffff",
+    "--jm-border": "#e4e0d8",
+    "--jm-positive": "#2f6b46",
+    "--jm-negative": "#a63d33",
+    "--jm-chart-1": "#2a78d6",
+    "--jm-chart-2": "#1baf7a",
+    "--jm-chart-3": "#eda100",
+    "--jm-chart-4": "#008300",
+    "--jm-chart-5": "#4a3aa7",
+    "--jm-chart-6": "#e34948",
+    "--jm-chart-7": "#e87ba4",
+    "--jm-chart-8": "#eb6834",
+    "--jm-shadow-sm": "0 1px 2px rgba(31, 27, 20, 0.05)",
+    "--jm-shadow-md": "0 1px 2px rgba(31, 27, 20, 0.05), 0 6px 18px rgba(31, 27, 20, 0.06)",
+}
 
 
 def _reject_comment_close(*values: str) -> None:
@@ -766,7 +841,7 @@ def build_theme(export: DesignExport, name: str) -> str:
             "left at jimemo defaults."
         )
 
-    color_map = _color_mappings(export)
+    color_map, skipped = _color_mappings(export)
     for role, (token, literal) in color_map.items():
         role_values[role] = literal if literal is not None else "var({})".format(token.name)
         mapped_lines.append((role, "computed from " + token.name if literal is not None else token.name))
@@ -774,7 +849,9 @@ def build_theme(export: DesignExport, name: str) -> str:
     for role in _ROLE_ORDER:
         if role == "--jm-font-prose" or role == "--jm-font-ui":
             continue
-        if role not in color_map:
+        if role in skipped:
+            review_notes.append(skipped[role])
+        elif role not in color_map:
             review_notes.append(
                 "{} was not auto-mapped -- no color token name matched this "
                 "role's heuristic; set it manually if the imported palette "
@@ -798,7 +875,9 @@ def build_theme(export: DesignExport, name: str) -> str:
 
     body_lines.append("")
     body_lines.append("  /* -- light-only: pin what tokens.css's dark block would leave -- */")
-    body_lines.extend("  {}: {};".format(n, v) for n, v in _LIGHT_ONLY_DECLS)
+    body_lines.extend(
+        "  {}: {};".format(n, v) for n, v in _LIGHT_DEFAULTS.items() if n not in role_values
+    )
 
     css = header + ":root {\n" + "\n".join(body_lines) + "\n}\n"
 
