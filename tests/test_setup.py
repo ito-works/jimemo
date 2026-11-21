@@ -493,14 +493,14 @@ def test_module_only_checks_token_presence_never_reads_its_value():
     """setup.py may check *presence* of CLOUDFLARE_API_TOKEN (to fail
     fast with a clear error) but must never capture or reuse its actual
     value: the only os.environ access in the module is the one
-    presence-check call, used solely for its truthiness."""
+    membership test, which reads no value (jimemo#z11e)."""
     import jimemo.publish.setup as mod
 
     src = Path(mod.__file__).read_text()
     environ_lines = [
         line.strip() for line in src.splitlines() if "os.environ" in line
     ]
-    assert environ_lines == ['elif not os.environ.get("CLOUDFLARE_API_TOKEN"):']
+    assert environ_lines == ['elif "CLOUDFLARE_API_TOKEN" not in os.environ:']
 
 
 def test_real_run_never_writes_the_token_to_config(tmp_path, monkeypatch):

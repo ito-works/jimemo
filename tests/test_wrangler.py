@@ -51,10 +51,9 @@ def test_pages_deploy_builds_expected_argv(tmp_path):
 
     w.pages_deploy("my-project", tmp_path)
 
-    assert runner.calls == [
-        ["mock-wrangler", "pages", "deploy", str(tmp_path),
-         "--project-name", "my-project", "--branch", "main"]
-    ]
+    _, command = _split_env_prefix(runner.calls[0])
+    assert command == ["mock-wrangler", "pages", "deploy", str(tmp_path),
+                       "--project-name", "my-project", "--branch", "main"]
 
 
 def test_pages_deploy_accepts_a_different_branch(tmp_path):
@@ -63,10 +62,9 @@ def test_pages_deploy_accepts_a_different_branch(tmp_path):
 
     w.pages_deploy("my-project", tmp_path, branch="preview")
 
-    assert runner.calls == [
-        ["mock-wrangler", "pages", "deploy", str(tmp_path),
-         "--project-name", "my-project", "--branch", "preview"]
-    ]
+    _, command = _split_env_prefix(runner.calls[0])
+    assert command == ["mock-wrangler", "pages", "deploy", str(tmp_path),
+                       "--project-name", "my-project", "--branch", "preview"]
 
 
 def test_pages_project_names_builds_expected_argv_and_parses_json():
@@ -251,28 +249,32 @@ def test_mock_wrangler_kv_get_unknown_key_returns_empty_string():
     assert mock.kv_get("ns", "never-written") == ""
 
 
-def test_account_id_threads_cloudflare_account_id_into_subprocess_env():
+def _split_env_prefix(argv):
+    """Split ``/usr/bin/env NAME=value ... <exe> <args>`` into the
+    assignments it sets and the command it runs; an argv without the
+    prefix sets nothing."""
+    if argv[0] != "/usr/bin/env":
+        return {}, argv
+    assigned = {}
+    rest = argv[1:]
+    while rest and "=" in rest[0]:
+        name, _, value = rest[0].partition("=")
+        assigned[name] = value
+        rest = rest[1:]
+    return assigned, rest
+
+
+def test_account_id_scopes_the_call_through_usr_bin_env_with_no_env_mapping():
     runner = FakeRunner(CompletedProcess([], 0, stdout="", stderr=""))
     w = Wrangler(runner=runner, account_id="acct-123")
 
     w.kv_get("ns123", "abc123")
 
-    assert len(runner.envs) == 1
-    env = runner.envs[0]
-    assert env is not None
-    assert env["CLOUDFLARE_ACCOUNT_ID"] == "acct-123"
-
-
-def test_account_id_env_is_inherited_environment_plus_account_id(monkeypatch):
-    monkeypatch.setenv("SOME_UNRELATED_VAR", "keep-me")
-    runner = FakeRunner(CompletedProcess([], 0, stdout="", stderr=""))
-    w = Wrangler(runner=runner, account_id="acct-123")
-
-    w.kv_get("ns123", "abc123")
-
-    env = runner.envs[0]
-    assert env["SOME_UNRELATED_VAR"] == "keep-me"
-    assert env["CLOUDFLARE_ACCOUNT_ID"] == "acct-123"
+    assert runner.calls == [[
+        "/usr/bin/env", "CLOUDFLARE_ACCOUNT_ID=acct-123",
+        "mock-wrangler", "kv", "key", "get", "abc123",
+        "--namespace-id", "ns123", "--text", "--remote"]]
+    assert runner.envs == [None]
 
 
 def test_no_account_id_passes_no_env_override():
@@ -284,6 +286,7 @@ def test_no_account_id_passes_no_env_override():
 
     w.kv_get("ns123", "abc123")
 
+    assert runner.calls[0][0] == "mock-wrangler"
     assert runner.envs == [None]
 
 
@@ -297,47 +300,111 @@ def test_account_id_settable_after_construction():
     w.account_id = "acct-456"
     w.kv_get("ns123", "abc123")
 
-    assert runner.envs[0]["CLOUDFLARE_ACCOUNT_ID"] == "acct-456"
+    assigned, _ = _split_env_prefix(runner.calls[0])
+    assert assigned == {"CLOUDFLARE_ACCOUNT_ID": "acct-456"}
+    assert runner.envs == [None]
 
 
-def test_account_id_never_carries_the_cf_api_token(monkeypatch):
-    """account_id is a non-secret identifier threaded through the
-    subprocess env; it must never carry the Cloudflare API token itself
-    -- that stays wherever it already was, in the inherited environment,
-    untouched and unread by this module."""
+def test_extra_env_rides_the_env_prefix_and_the_token_never_appears(
+        tmp_path, monkeypatch):
+    """The scoped names travel as /usr/bin/env arguments; the inherited
+    environment, the token included, is never copied into Python."""
     monkeypatch.setenv("CLOUDFLARE_API_TOKEN", "super-secret-token")
+    monkeypatch.delenv("WRANGLER_LOG", raising=False)
     runner = FakeRunner(CompletedProcess([], 0, stdout="", stderr=""))
-    w = Wrangler(runner=runner, account_id="acct-123")
+    Wrangler(runner=runner, account_id="acct-9").pages_deploy("p", tmp_path)
 
-    w.kv_get("ns123", "abc123")
+    argv, = runner.calls
+    assigned, rest = _split_env_prefix(argv)
+    assert set(assigned) == {"WRANGLER_OUTPUT_FILE_PATH",
+                             "CLOUDFLARE_ACCOUNT_ID", "WRANGLER_LOG"}
+    assert assigned["CLOUDFLARE_ACCOUNT_ID"] == "acct-9"
+    assert rest[0] == "mock-wrangler"
+    assert runner.envs == [None]
+    assert all("super-secret-token" not in a for a in argv)
 
-    env = runner.envs[0]
-    # Inherited unchanged (subprocess would see it exactly as it exists
-    # in this process's own environment) -- not read, copied, or altered
-    # by Wrangler itself.
-    assert env["CLOUDFLARE_API_TOKEN"] == "super-secret-token"
+
+@pytest.mark.parametrize("extra", [
+    {"BAD NAME": "x"}, {"1ABC": "x"}, {"": "x"}, {"A=B": "x"},
+    {"-i": "x"}, {"OK": "nul\x00inside"}])
+def test_invoke_refuses_an_unsafe_env_name_or_value(extra):
+    runner = FakeRunner(CompletedProcess([], 0, stdout="", stderr=""))
+    w = Wrangler(runner=runner)
+    with pytest.raises(PublishError):
+        w._invoke(["kv", "key", "list"], "kv key list", extra_env=extra)
+    assert runner.calls == []
 
 
-def test_module_never_reads_the_cf_api_token_value():
-    """jimemo must never read the value of CLOUDFLARE_API_TOKEN --
-    wrangler resolves its own auth directly, from its own subprocess
-    environment (inherited unchanged) or its own credential store.
-    Passing CLOUDFLARE_ACCOUNT_ID through the subprocess env for account
-    scoping is fine and expected (a non-secret identifier) -- os /
-    os.environ are now legitimately used for that -- but nothing in this
-    module may ever look up the token's value."""
-    import jimemo.publish.wrangler as mod
+def test_invoke_refuses_an_executable_env_would_read_as_an_assignment():
+    runner = FakeRunner(CompletedProcess([], 0, stdout="", stderr=""))
+    w = Wrangler(runner=runner, executable="/opt/a=b/wrangler",
+                 account_id="acct-1")
+    with pytest.raises(PublishError):
+        w.kv_list("ns")
+    assert runner.calls == []
 
-    src = Path(mod.__file__).read_text()
-    for pattern in (
-        'os.environ.get("CLOUDFLARE_API_TOKEN")',
-        "os.environ.get('CLOUDFLARE_API_TOKEN')",
-        'os.environ["CLOUDFLARE_API_TOKEN"]',
-        "os.environ['CLOUDFLARE_API_TOKEN']",
-        'os.getenv("CLOUDFLARE_API_TOKEN")',
-        "os.getenv('CLOUDFLARE_API_TOKEN')",
-    ):
-        assert pattern not in src
+
+@pytest.mark.parametrize("stderr", [
+    "env: mock-wrangler: No such file or directory\n",
+    "/usr/bin/env: 'mock-wrangler': No such file or directory\n",
+    "env: mock-wrangler: Permission denied\n",
+])
+def test_env_not_finding_the_executable_is_the_missing_wrangler_error(
+        tmp_path, stderr):
+    code = 126 if "Permission" in stderr else 127
+    runner = FakeRunner(CompletedProcess([], code, stdout="", stderr=stderr))
+    w = Wrangler(runner=runner, account_id="acct-1")
+    for call in (lambda: w.kv_list("ns"),
+                 lambda: w.pages_deploy("p", tmp_path)):
+        with pytest.raises(PublishError) as exc:
+            call()
+        assert str(exc.value) == NO_WRANGLER_MESSAGE
+
+
+def test_wrangler_own_exit_127_with_output_keeps_its_failure_text():
+    runner = FakeRunner(CompletedProcess(
+        [], 127, stdout="", stderr="✘ [ERROR] something wrangler said\n"))
+    w = Wrangler(runner=runner, account_id="acct-1")
+    with pytest.raises(PublishError) as exc:
+        w.kv_list("ns")
+    assert str(exc.value) != NO_WRANGLER_MESSAGE
+    assert "exit 127" in str(exc.value)
+    assert "something wrangler said" in str(exc.value)
+
+
+def test_scoped_ordinary_nonzero_exit_keeps_its_failure_text():
+    runner = FakeRunner(CompletedProcess([], 3, stdout="", stderr="boom"))
+    w = Wrangler(runner=runner, account_id="acct-1")
+    with pytest.raises(PublishError, match="kv key list.*exit 3.*boom"):
+        w.kv_list("ns")
+    assert runner.envs == [None]
+
+
+def test_env_prefix_reaches_a_real_executable(tmp_path, monkeypatch):
+    """End to end through the default runner: the child sees the scoped
+    name and still inherits the rest of the environment."""
+    monkeypatch.setenv("SOME_UNRELATED_VAR", "keep-me")
+    executable = tmp_path / "mock-wrangler-env"
+    executable.write_text(
+        f"#!{sys.executable}\n"
+        "import json, os\n"
+        "print(json.dumps({k: os.environ.get(k) for k in\n"
+        " ('CLOUDFLARE_ACCOUNT_ID', 'SOME_UNRELATED_VAR')}))\n"
+    )
+    executable.chmod(0o755)
+    w = Wrangler(executable=str(executable), account_id="acct-77")
+    result = w._invoke([], "probe")
+    assert json.loads(result.stdout) == {"CLOUDFLARE_ACCOUNT_ID": "acct-77",
+                                         "SOME_UNRELATED_VAR": "keep-me"}
+
+
+def test_missing_real_executable_through_env_is_the_missing_wrangler_error(
+        tmp_path):
+    w = Wrangler(executable=str(tmp_path / "no-such-wrangler"),
+                 account_id="acct-1")
+    with pytest.raises(PublishError) as exc:
+        w.kv_list("ns")
+    assert str(exc.value) == NO_WRANGLER_MESSAGE
 
 
 # ---------------------------------------------------------------------------
@@ -760,12 +827,12 @@ def test_pages_deploy_env_adds_only_the_output_path_and_log_level(
     monkeypatch.delenv("WRANGLER_LOG", raising=False)
     runner = FakeRunner(CompletedProcess([], 0, stdout="", stderr=""))
     Wrangler(runner=runner, account_id="acct-9").pages_deploy("p", tmp_path)
-    env, = runner.envs
-    added = {k: v for k, v in env.items() if os.environ.get(k) != v}
+    added, _ = _split_env_prefix(runner.calls[0])
     assert set(added) == {"WRANGLER_OUTPUT_FILE_PATH", "CLOUDFLARE_ACCOUNT_ID",
                           "WRANGLER_LOG"}
     assert added["CLOUDFLARE_ACCOUNT_ID"] == "acct-9"
     assert added["WRANGLER_LOG"] == "log"
+    assert runner.envs == [None]
 
 
 @pytest.mark.parametrize("stdout,code,match", [
@@ -1288,3 +1355,95 @@ def test_mock_wrangler_bind_runs_the_real_read_back_check():
     m.patch_drops = ("compatibility_date",)
     with pytest.raises(KVBindingError, match="compatibility_date"):
         m.pages_project_bind_kv("p", "TOMBSTONES", "ns-1")
+
+
+# ---------------------------------------------------------------------------
+# AST guard over the publish package (jimemo#z11e): jimemo never reads a
+# token's value and never copies or enumerates the environment. The only
+# shapes allowed are a membership test (``"NAME" in os.environ``) and a
+# ``.get``/``getenv`` of a constant, non-token name.
+# ---------------------------------------------------------------------------
+
+import ast
+
+PUBLISH_DIR = Path(__file__).resolve().parents[1] / "src" / "jimemo" / "publish"
+
+
+def _is_token_name(node):
+    return not (isinstance(node, ast.Constant) and isinstance(node.value, str)
+                and "TOKEN" not in node.value.upper())
+
+
+def _is_environ(node):
+    return ((isinstance(node, ast.Attribute) and node.attr == "environ"
+             and isinstance(node.value, ast.Name) and node.value.id == "os")
+            or (isinstance(node, ast.Name) and node.id == "environ"))
+
+
+def _is_getenv(func):
+    return ((isinstance(func, ast.Attribute) and func.attr == "getenv")
+            or (isinstance(func, ast.Name) and func.id == "getenv"))
+
+
+def environ_violations(source):
+    """Line numbers where ``source`` reads a token value or copies or
+    enumerates the environment."""
+    tree = ast.parse(source)
+    parents = {child: node for node in ast.walk(tree)
+               for child in ast.iter_child_nodes(node)}
+    bad = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and _is_getenv(node.func):
+            if not node.args or _is_token_name(node.args[0]):
+                bad.append(node.lineno)
+        if not _is_environ(node):
+            continue
+        parent = parents.get(node)
+        if (isinstance(parent, ast.Compare) and node in parent.comparators
+                and all(isinstance(op, (ast.In, ast.NotIn)) for op in parent.ops)):
+            continue                                 # membership: reads no value
+        if (isinstance(parent, ast.Attribute) and parent.attr == "get"
+                and isinstance(parents.get(parent), ast.Call)
+                and parents[parent].func is parent
+                and parents[parent].args
+                and not _is_token_name(parents[parent].args[0])):
+            continue                                 # .get of a non-token name
+        bad.append(node.lineno)
+    return bad
+
+
+@pytest.mark.parametrize("source", [
+    "env = dict(os.environ, **extra) if extra else None",   # the line z11e removed
+    "env = os.environ.copy()",
+    "env = {**os.environ}",
+    "names = list(os.environ.keys())",
+    "pairs = os.environ.items()",
+    "vals = os.environ.values()",
+    "for k in os.environ: pass",
+    "run(argv, env=os.environ)",
+    "t = os.environ['CLOUDFLARE_API_TOKEN']",
+    "t = os.environ['JIMEMO_WRANGLER']",
+    "t = os.environ.get('CLOUDFLARE_API_TOKEN')",
+    "t = os.environ.get(name)",
+    "t = os.getenv('CLOUDFLARE_API_TOKEN')",
+    "from os import environ\nt = environ.get('CF_API_TOKEN')",
+    "from os import getenv\nt = getenv('CLOUDFLARE_API_TOKEN', '')",
+])
+def test_environ_guard_rejects_reads_copies_and_enumeration(source):
+    assert environ_violations(source)
+
+
+@pytest.mark.parametrize("source", [
+    "ok = 'CLOUDFLARE_API_TOKEN' not in os.environ",
+    "ok = 'CLOUDFLARE_API_TOKEN' in os.environ",
+    "w = os.environ.get('JIMEMO_WRANGLER', 'wrangler')",
+    "w = os.getenv('WRANGLER_LOG')",
+])
+def test_environ_guard_allows_membership_and_non_token_lookups(source):
+    assert environ_violations(source) == []
+
+
+@pytest.mark.parametrize("path", sorted(PUBLISH_DIR.glob("*.py")),
+                         ids=lambda p: p.name)
+def test_publish_package_never_reads_a_token_or_copies_the_environment(path):
+    assert environ_violations(path.read_text()) == [], path
