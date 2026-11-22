@@ -6,6 +6,8 @@ prints the version you have; each released version is tagged `vX.Y.Z`.
 
 ## Unreleased
 
+## 0.0.5 - 2026-11-22
+
 - Tooltips: a `title` on an inline element or a markdown image in your
   content now shows as a themed box on hover and on tap. Pages without a
   `title` are unchanged.
@@ -22,6 +24,19 @@ prints the version you have; each released version is tagged `vX.Y.Z`.
   `TOMBSTONES` itself, so the dashboard steps are no longer needed.
   `JIMEMO_WRANGLER=/path/to/wrangler` picks the Wrangler to run. A deploy
   that fails after the upload keeps the page instead of reporting it lost.
+- `jimemo render --lang TAG` sets the page's language, for example
+  `--lang ja`. Without it, pages stay `en`.
+- Chart axis labels, legend text, grid lines and radar tick labels follow
+  the page's light or dark mode. Re-render an older page to get it.
+- A theme from `import-design` stays light when the reader's system is in
+  dark mode, and its positive and negative badge colours meet WCAG AA
+  contrast against the page background. Re-run `import-design` to update a
+  theme you imported before.
+- `jimemo doctor` warns when the `cloudflare` backend's installed
+  middleware or `_headers` differs from this version's copy; run
+  `jimemo publish setup --assets-only` to refresh them.
+- `install.sh` links the Codex skill only when Codex is installed, and no
+  longer creates `~/.codex` on a Mac without it.
 
 ## 0.0.4 - 2026-09-30
 
