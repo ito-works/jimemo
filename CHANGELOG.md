@@ -22,7 +22,11 @@ prints the version you have; each released version is tagged `vX.Y.Z`.
 - Publishing with the `cloudflare` backend: `jimemo publish setup` now
   creates the `<project>-tombstones` KV namespace and binds it as
   `TOMBSTONES` itself, so the dashboard steps are no longer needed.
-  `JIMEMO_WRANGLER=/path/to/wrangler` picks the Wrangler to run. A deploy
+  jimemo no longer runs `npx wrangler`, so it never downloads Wrangler:
+  install a Wrangler version you choose on `PATH` (for example
+  `npm install --global wrangler@4.153.0`), or set
+  `JIMEMO_WRANGLER=/path/to/wrangler` to an executable you already have.
+  Without one, publishing stops with a message saying so. A deploy
   that fails after the upload keeps the page instead of reporting it lost.
 - `jimemo render --lang TAG` sets the page's language, for example
   `--lang ja`. Without it, pages stay `en`.
