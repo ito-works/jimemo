@@ -58,6 +58,7 @@ import review_evidence as gh  # noqa: E402  (its GitHub read helpers)
 API = gh.API
 BridgeError = gh.BridgeError
 ZERO_SHA = "0" * 40
+PR_OPEN_LABEL = "pr-open"
 
 
 # --- kata
@@ -174,6 +175,17 @@ def land_one(pr, repo, main_branch, kata_bin, runner=None, projects=None):
                 "%s#%s landed %s, left open (rc %d)"
                 % (meta["project"], meta["ref"], merge_sha[:8], rc))
 
+    # The pull request has merged, so `pr-open` is no longer true (kata
+    # jibot-code#x7sm). Taken off before the close, so the close's --if-match
+    # revision is read after this change. Removing a label the issue does not
+    # carry exits 0, so a non-zero rc is a real failure: the close still runs,
+    # so the landing is recorded, and the job fails so the stale label is seen.
+    note = ""
+    label_rc, _ = kata(["label", "rm", meta["ref"], PR_OPEN_LABEL], meta["project"],
+                       kata_bin, runner)
+    if label_rc != 0:
+        note = "; label rm %s failed (rc %d)" % (PR_OPEN_LABEL, label_rc)
+
     # One retry on a revision conflict, with the SAME idempotency key: the key
     # is what makes the retry safe, and the new revision is what makes it work.
     for _attempt in (1, 2):
@@ -182,9 +194,9 @@ def land_one(pr, repo, main_branch, kata_bin, runner=None, projects=None):
                      meta["project"], kata_bin, runner)
         if rc != kata_close.REVISION_CONFLICT_EXIT:
             break
-    return ("closed" if rc == 0 else "failed",
-            "%s#%s closed with commit %s (rc %d)"
-            % (meta["project"], meta["ref"], merge_sha[:8], rc))
+    return ("closed" if rc == 0 and label_rc == 0 else "failed",
+            "%s#%s closed with commit %s (rc %d)%s"
+            % (meta["project"], meta["ref"], merge_sha[:8], rc, note))
 
 
 def landed(env, opener=None, runner=None):

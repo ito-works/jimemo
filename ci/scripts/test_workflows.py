@@ -415,6 +415,19 @@ class ReviewEvidenceEntryPoint(unittest.TestCase):
             self.assertFalse(kata_projects_bound(broken, "verify and publish"))
 
 
+class ReviewEvidenceTriggers(unittest.TestCase):
+    """A pull request body fixed after the check ran must re-run the check
+    (kata jibot-code#x7sm): the verifier re-reads the body from the API, so
+    `edited` is all it needs. The types stay the explicit list."""
+
+    def test_a_body_edit_re_runs_the_check(self):
+        text = read("review-evidence.yml")
+        m = re.search(r"  pull_request_target:\n    types: \[([^\]]*)\]", text)
+        self.assertIsNotNone(m)
+        self.assertEqual([t.strip() for t in m.group(1).split(",")],
+                         ["opened", "synchronize", "reopened", "edited"])
+
+
 class CheckName(unittest.TestCase):
     def test_the_required_check_name_is_pinned(self):
         # The ruleset matches a required check by NAME. Pinned here so the

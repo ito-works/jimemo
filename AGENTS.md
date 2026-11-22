@@ -179,6 +179,12 @@ review-evidence check accepts only the projects in the repository variable
 name varies). Twice a jibot-code fix met that refusal and re-landed under a
 second issue (jimemo#hsqz, jimemo#68cj).
 
+The required `mujin/review-evidence` check reads the pull request body. A
+pull request opened by hand must carry the stanza `repoman-submit` writes
+(`ops/repoman/bin/repoman-submit` in cell-fleet, the `pr_body` block): the
+lines `kata:`, `repo:`, `branch:`, `attempt:`, `host:`, `worktree:`,
+`dispatch_id:` and `close:`. Editing the body re-runs the check.
+
 `repoman-submit` lives in the cell-fleet repo at
 `ops/repoman/bin/repoman-submit`. The marker file is the check: if
 `.repoman-managed` is not present at a repo's root, that repo is unmanaged and

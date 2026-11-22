@@ -334,8 +334,9 @@ def member_bound(repo, member, projects, kata_bin, token, opener=None,
 
     The App check on a member's head says `pr_verdict` accepted it when it ran,
     against the body, the KATA_PROJECTS and the kata issue of that moment. All
-    three can change after it without a new pull-request run (a body edit does
-    not move the head, and `edited` is not a trigger), and the check does not
+    three can change after it without a new pull-request run (a body edit
+    re-runs the check since jibot-code#x7sm, but KATA_PROJECTS and the kata
+    issue still change silently), and the check does not
     record which project's evidence it accepted. So the group runs the whole
     verdict again for every member (kata jibot-code#ajqt): the current body,
     bound to the current KATA_PROJECTS, with its evidence read from kata for

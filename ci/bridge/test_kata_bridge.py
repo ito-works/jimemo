@@ -81,8 +81,8 @@ class Landed(unittest.TestCase):
         k = Kata()
         rc = kb.main(["landed"], landed_env(), opener=landed_gh([pr()]), runner=k)
         self.assertEqual(rc, 0)
-        self.assertEqual(k.verbs(), ["show", "close"])
-        close = k.argv[1]
+        self.assertEqual(k.verbs(), ["label", "show", "close"])
+        close = k.argv[2]
         self.assertEqual(close[:3], ["close", "kc3m", "--done"])
         self.assertIn("commit:%s" % MERGE, close)
         self.assertEqual(close[close.index("--if-match") + 1], "5")
@@ -90,12 +90,41 @@ class Landed(unittest.TestCase):
                          "repoman-canary-ops-kc3m-20260921T120000Z.abcdef-%s" % MERGE)
         self.assertEqual(close[-3:], ["--project", "jibot-code", "--agent"])
 
+    def test_a_close_also_removes_the_pr_open_label(self):
+        # kata jibot-code#x7sm: the pull request has merged, so `pr-open` is
+        # no longer true. Taken off before the close, so the close's
+        # --if-match revision is read after the label change.
+        k = Kata()
+        rc = kb.main(["landed"], landed_env(), opener=landed_gh([pr()]), runner=k)
+        self.assertEqual(rc, 0)
+        self.assertEqual(k.verbs(), ["label", "show", "close"])
+        self.assertEqual(k.argv[0], ["label", "rm", "kc3m", "pr-open",
+                                     "--project", "jibot-code", "--agent"])
+
+    def test_a_failed_pr_open_removal_still_closes_and_fails_the_job(self):
+        # A missing label exits 0 under kata's contract, so a non-zero rc is a
+        # real failure: the landing is still recorded, and the job goes red so
+        # the stale `pr-open` is seen.
+        k = Kata(label_rm_rc=1)
+        rc, out, _ = captured(lambda: kb.main(["landed"], landed_env(),
+                                              opener=landed_gh([pr()]), runner=k))
+        self.assertEqual(rc, 1)
+        self.assertIn("failed", out)
+        self.assertEqual(k.verbs(), ["label", "show", "close"])
+        self.assertIn("pr-open", out)
+
+    def test_close_false_leaves_the_labels_alone(self):
+        k = Kata()
+        kb.main(["landed"], landed_env(), opener=landed_gh([pr(body=BODY + "\nclose: false")]),
+                runner=k)
+        self.assertNotIn("label", k.verbs())
+
     def test_a_revision_conflict_retries_once_with_the_new_revision_and_the_same_key(self):
         k = Kata(close_rcs=(6, 0))
         rc = kb.main(["landed"], landed_env(), opener=landed_gh([pr()]), runner=k)
         self.assertEqual(rc, 0)
-        self.assertEqual(k.verbs(), ["show", "close", "show", "close"])
-        first, second = k.argv[1], k.argv[3]
+        self.assertEqual(k.verbs(), ["label", "show", "close", "show", "close"])
+        first, second = k.argv[2], k.argv[4]
         self.assertEqual(first[first.index("--if-match") + 1], "5")
         self.assertEqual(second[second.index("--if-match") + 1], "6")
         self.assertEqual(first[first.index("--idempotency-key") + 1],
@@ -171,18 +200,19 @@ class Landed(unittest.TestCase):
         k = Kata()
         rc = kb.main(["landed"], landed_env(KATA_PROJECTS="nanoclaw,jibot-code"),
                      opener=landed_gh([pr()]), runner=k)
-        self.assertEqual((rc, k.verbs()), (0, ["show", "close"]))
+        self.assertEqual((rc, k.verbs()), (0, ["label", "show", "close"]))
 
     def test_both_declared_projects_are_served(self):
         other = BODY.replace("kata: jibot-code#kc3m", "kata: nanoclaw#aaaa")
         k = Kata(close_rcs=(0, 0))
         rc = kb.main(["landed"], landed_env(KATA_PROJECTS="nanoclaw,jibot-code"),
                      opener=landed_gh([pr(number=7, body=other), pr(number=8)]), runner=k)
-        self.assertEqual((rc, k.verbs()), (0, ["show", "close", "show", "close"]))
+        self.assertEqual((rc, k.verbs()),
+                         (0, ["label", "show", "close", "label", "show", "close"]))
         projects = [a[a.index("--project") + 1] for a in k.argv]
-        self.assertEqual(projects, ["nanoclaw", "nanoclaw", "jibot-code", "jibot-code"])
-        self.assertEqual(k.argv[1][1], "aaaa")
-        self.assertEqual(k.argv[3][1], "kc3m")
+        self.assertEqual(projects, ["nanoclaw"] * 3 + ["jibot-code"] * 3)
+        self.assertEqual(k.argv[2][1], "aaaa")
+        self.assertEqual(k.argv[5][1], "kc3m")
 
 
 def artifact_zip(text):
